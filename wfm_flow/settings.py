@@ -35,6 +35,9 @@ DEFAULTS = {
     "WFM_SOURCE_SYSTEM": "NSV",
     # a failed survey (copy error, crash) is retried on the next runs up to this many times
     "WFM_MAX_ATTEMPTS": "3",
+    # stages whose WARNING is recorded and the survey goes on (comma separated; empty = stop at every warning,
+    # as run.py --scheduled). A FAILED step always stops; the database stages write only after a clean check.
+    "WFM_CONTINUE_ON_WARNING": "bronze,silver,images",
     # local folder of the processed log, the Postgres rows and the migration manifests (relative to the repo)
     "WFM_WORK_DIR": "logs/wfm",
 }

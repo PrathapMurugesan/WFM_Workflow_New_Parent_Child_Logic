@@ -6,9 +6,9 @@ pipeline, unchanged.
 
 ```
 Postgres (WFM)                 S3 (WFM upload)                    S3 (stage)                         this repository
-wfm_survey_schedule  ──ready?──► reports/<survey id>/D1..D4 ──MIGRATE──► WFM_Raw/Zone D/Phase 1/Cycle 2/ ──► run.py --scheduled
-+ wfm_report                     <timestamp>-<file>, zips              <UPC>/Deliverable 1..4/           bronze → silver → images →
-zone / phase / cycle / UPC                                             (unzipped, no videos)             push_silver → gold → push_gold
+wfm_survey_schedule  ──ready?──► reports/<survey id>/D1..D4 ──MIGRATE──► WFM_Raw/Zone D/Phase 1/Cycle 2/ ──► run.py, stage by stage
++ wfm_report                     <timestamp>-<file>, zips              <UPC>/Deliverable 1..4/           bronze → silver → images → gold
+zone / phase / cycle / UPC                                             (unzipped, no videos)             → push_silver → push_gold (DB last)
 ```
 
 | File | What it does |
@@ -32,9 +32,10 @@ zone / phase / cycle / UPC                                             (unzipped
 
    | status | meaning | next trigger run |
    |---|---|---|
-   | `ok` | `run.py` finished every step | never again (`--reprocess` / `--survey <id> --force` to redo) |
-   | `stopped` | `run.py` stopped at a step: a warning, an error or a failed DB check (`stopped_at` names it) | again only when the survey changes in WFM (new upload / version); else `--survey <id> --force` |
-   | `failed` | the copy failed, or `run.py` crashed | retried, up to `WFM_MAX_ATTEMPTS` (3) |
+   | `ok` | every stage OK | never again (`--reprocess` / `--survey <id> --force` to redo) |
+   | `warnings` | every stage done; data warnings were passed (`note` lists them) | never again (as `ok`) |
+   | `stopped` | stopped at a step: a warning outside `WFM_CONTINUE_ON_WARNING`, or a DB check with blockers (`stopped_at` names it) | again only when the survey changes in WFM (new upload / version); else `--survey <id> --force` |
+   | `failed` | the copy failed, or a step failed / crashed | retried, up to `WFM_MAX_ATTEMPTS` (3) |
    | `running` | being processed (left behind only if the machine stopped) | processed again |
 3. **Upload there?** `<WFM_REPORTS_S3_ROOT>/<survey id>/` must have files.
 4. **MIGRATE** to `<WFM_STAGE_S3>/Zone D/Phase 1/Cycle 2/N_04018_05002_AP/Deliverable 1 - RAMS Data/...`
@@ -42,10 +43,17 @@ zone / phase / cycle / UPC                                             (unzipped
    timestamps are removed (a file uploaded twice: the newest), videos are left out, damaged zip entries are recovered
    and checked by CRC. The manifest of every file goes to `<WFM_STAGE_S3>/_manifests/<survey id>.json` and
    `logs/wfm/manifests/`.
-5. **run.py** `--scheduled --zone D --phase 1 --cycle 2 --upc N/04018/05002/AP`, with `RAW_S3_ROOT=<WFM_STAGE_S3>`.
-   The run keeps its own controls: it stops at the first warning or error, and writes to the database only after a
-   clean check. Each survey is its own run; gold only changes the rows of the run's surveys.
-6. The processed log gets the result, the run's log folder (`logs/run_<time>/`) and, when stopped, the step and why.
+5. **The stages**, one `run.py --scheduled --only <stage> --zone D --phase 1 --cycle 2 --upc N/04018/05002/AP` each,
+   with `RAW_S3_ROOT=<WFM_STAGE_S3>`: **bronze → silver → images → gold → push_silver → push_gold** — every S3 layer
+   first, the database only after gold.
+   - stage OK → the next stage;
+   - a **WARNING** of a stage in `WFM_CONTINUE_ON_WARNING` (default `bronze,silver,images`: data quality, e.g. a
+     missing CRRI PCI workbook, silver DQ checks against D2) → recorded in the processed log, the next stage runs;
+   - any other warning, a **FAILED** step, or a database **check with blockers** → the survey stops there;
+   - push_silver / push_gold write only after their own clean check (one transaction each; an error rolls back).
+   Each survey is its own run; gold only changes the rows of that survey.
+6. The processed log gets the result, the passed warnings, every run log folder (`logs/run_<time>/`) and, when
+   stopped, the step and why.
 
 Surveys run one after another. One survey stopping or failing never stops the next one; only a settings problem
 (`run.py` exit 2) stops the whole trigger run.
@@ -112,6 +120,7 @@ anywhere takes the default. A key set but empty stays empty (`WFM_STATE_S3=` →
 | `WFM_FINAL_STATUSES` | `Survey Final Approved` | ready statuses (comma separated) |
 | `WFM_SOURCE_SYSTEM` | `NSV` | only schedules of this `source_system` |
 | `WFM_MAX_ATTEMPTS` | `3` | retries of a failed survey |
+| `WFM_CONTINUE_ON_WARNING` | `bronze,silver,images` | stages whose warning is recorded and passed; empty = stop at every warning |
 | `WFM_WORK_DIR` | `logs/wfm` | local processed log, Postgres rows (`metadata/<id>.json`), manifests |
 
 ## Tests
@@ -119,5 +128,5 @@ anywhere takes the default. A key set but empty stays empty (`WFM_STATE_S3=` →
 ```bash
 python -m pytest -q wfm_flow/tests
 ```
-Upload layout → stage layout, bronze's `run_download.py` finding the stage folders, and the trigger rules (new / ok /
-stopped / failed / not ready / dry run).
+Upload layout → stage layout, bronze's `run_download.py` finding the stage folders, the stage order (DB last) and the
+trigger rules (new / ok / warnings passed / stopped / failed / not ready / dry run).

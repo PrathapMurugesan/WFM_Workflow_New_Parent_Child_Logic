@@ -4,9 +4,9 @@
   bronze       survey   bronze/run_bronze_s3.sh                                   0 ok, 2 warning (sheet rejected)
   silver       survey   silver/run_silver_s3.sh                                   0 ok, 1 warning (table / DQ check FAILED)
   images       survey   images/upload_images.py (breach images → CDN, urls into silver) 0 ok, 1 warning (uploads failed)
+  gold         run      python -m ris_kpi run --upc-list …, then sync-db-ids     0 ok
   push_silver  survey   push_silver/push.py --silver … --db …          (check)    0 ok, else blockers
                         push_silver/push.py … --apply                  (write)    0 ok, else rolled back
-  gold         run      python -m ris_kpi run --upc-list …, then sync-db-ids     0 ok
   push_gold    run      push_gold/push_to_db.py --dry-run true         (check)    0 ok, else rejected values
                         push_gold/push_to_db.py --dry-run false        (write)    0 ok, else rolled back
 

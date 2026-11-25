@@ -15,7 +15,8 @@ ROOT = Path(__file__).resolve().parents[1]                       # the repositor
 CODE = Path(os.getenv("PIPELINE_CODE_ROOT") or ROOT)             # stage folders (tests point this to fake stages)
 ENV_FILE = Path(os.getenv("PIPELINE_ENV") or ROOT / ".env")
 
-ALL_STAGES = ["bronze", "silver", "images", "push_silver", "gold", "push_gold"]
+# order: every S3 layer first (bronze -> silver -> images -> gold), the database pushes only after gold
+ALL_STAGES = ["bronze", "silver", "images", "gold", "push_silver", "push_gold"]
 DB_STAGES = {"push_silver", "push_gold"}
 PACKAGES = {"pandas": "pandas", "pyarrow": "pyarrow", "openpyxl": "openpyxl", "boto3": "boto3", "requests": "requests",
             "sqlalchemy": "sqlalchemy", "psycopg2": "psycopg2-binary", "dotenv": "python-dotenv"}

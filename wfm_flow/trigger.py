@@ -15,10 +15,14 @@ For each survey:
      'failed' is retried up to WFM_MAX_ATTEMPTS times
   3. S3: the upload must be there - <WFM_REPORTS_S3_ROOT>/<survey id>/ with D1..D4
   4. MIGRATE (migrate.py): unzipped, no videos -> <WFM_STAGE_S3>/Zone D/Phase 1/Cycle 2/<UPC>/Deliverable 1..4/
-  5. run.py --scheduled --zone --phase --cycle --upc   with RAW_S3_ROOT = <WFM_STAGE_S3>
-     bronze -> silver -> images -> push_silver -> gold -> push_gold, with run.py's own controls: a scheduled run
-     stops at the first warning or error, and writes to the database only after a clean check
-  6. processed log updated (status, run log folder, the step it stopped at)
+  5. run.py --scheduled --only <stage> --zone --phase --cycle --upc, one stage after another, RAW_S3_ROOT =
+     <WFM_STAGE_S3>:  bronze -> silver -> images -> gold -> push_silver -> push_gold  (the database last)
+     - a stage OK -> the next one
+     - a WARNING of a stage in WFM_CONTINUE_ON_WARNING (default bronze, silver, images: data quality, e.g. a
+       missing CRRI workbook or a silver DQ check vs D2) -> recorded, the next stage runs
+     - any other WARNING, a FAILED step or a database check with blockers -> the survey stops there
+     - the database stages write only after their own clean check (run.py)
+  6. processed log updated (status, the warnings, the step it stopped at, the run log folders)
 One survey after another, each in its own run.py (gold only changes the rows of the run's surveys).
 Exit code: 0 nothing failed or stopped, 1 a survey failed / stopped or the trigger could not run.
 """
@@ -39,6 +43,7 @@ from .state import State
 
 RUN_PY = Path(os.getenv("WFM_RUN_PY") or ROOT / "run.py")       # tests point this to a fake run.py
 ZONES, PHASES, CYCLES = "ABCDE", ("1", "2", "3"), ("1", "2", "3")   # values bronze accepts (bronze/settings.py)
+DONE = ("ok", "warnings")                    # processed: not picked again (--reprocess / --survey <id> --force)
 
 
 def now():
@@ -97,21 +102,38 @@ def run_log_result(log_dir: Path, before: set):
     return folder, reason
 
 
+def stages_to_run(cfg, o):
+    """The stages of the run, in pipeline order (pipeline/settings.py ALL_STAGES, STAGES of .env, --from / --to)."""
+    from pipeline.settings import ALL_STAGES
+    start, end = o.start or ALL_STAGES[0], o.end or ALL_STAGES[-1]
+    return [x for x in ALL_STAGES[ALL_STAGES.index(start):ALL_STAGES.index(end) + 1] if x in cfg.s.stages]
+
+
 def run_survey(cfg, d, o):
-    """run.py for one survey (zone / phase / cycle / upc from Postgres); returns (exit code, log folder, reason)."""
-    cmd = [sys.executable, str(RUN_PY), "--scheduled", "--zone", d["zone"], "--phase", d["phase"],
-           "--cycle", d["cycle"], "--upc", d["upc"]]
-    cmd += ["--no-write"] if o.no_write else []
-    for flag in ("start", "end", "db"):
-        if getattr(o, flag):
-            cmd += [{"start": "--from", "end": "--to", "db": "--db"}[flag], getattr(o, flag)]
+    """The stages for one survey, each its own 'run.py --scheduled --only <stage>'.
+    Returns (exit code, [log folders], reason it stopped or None, [warnings that were passed])."""
+    go_on = {x.strip() for x in cfg.get("WFM_CONTINUE_ON_WARNING").split(",") if x.strip()}
     log_dir = cfg.s.path("LOG_DIR", "logs")
-    before = {p.name for p in log_dir.glob("run_*")} if log_dir.is_dir() else set()
-    log(f"  RUN  RAW_S3_ROOT={cfg.stage_root()} {' '.join(cmd[1:])}")
-    code = subprocess.call(cmd, cwd=str(ROOT), env={**os.environ, "RAW_S3_ROOT": cfg.stage_root(),
-                                                    "PYTHONIOENCODING": "utf-8"})
-    folder, reason = run_log_result(log_dir, before)
-    return code, folder, reason
+    env = {**os.environ, "RAW_S3_ROOT": cfg.stage_root(), "PYTHONIOENCODING": "utf-8"}
+    folders, warnings = [], []
+    for stage in stages_to_run(cfg, o):
+        cmd = [sys.executable, str(RUN_PY), "--scheduled", "--only", stage, "--zone", d["zone"], "--phase", d["phase"],
+               "--cycle", d["cycle"], "--upc", d["upc"]]
+        cmd += (["--no-write"] if o.no_write else []) + (["--db", o.db] if o.db else [])
+        before = {p.name for p in log_dir.glob("run_*")} if log_dir.is_dir() else set()
+        log(f"  RUN  RAW_S3_ROOT={cfg.stage_root()} {' '.join(cmd[1:])}")
+        code = subprocess.call(cmd, cwd=str(ROOT), env=env)
+        folder, why = run_log_result(log_dir, before)
+        folders += [str(folder)] if folder else []
+        if code == 0:
+            continue
+        warning = code == 1 and why and "warning (exit" in why
+        if warning and stage in go_on:
+            warnings.append(why)
+            log(f"  WARNING passed ({stage} in WFM_CONTINUE_ON_WARNING): {why}")
+            continue
+        return code, folders, why or f"{stage}: exit code {code}", warnings
+    return 0, folders, None, warnings
 
 
 def pick(item, state, cfg, o):
@@ -124,8 +146,8 @@ def pick(item, state, cfg, o):
     last = state.get(sid)
     fp = metadata.fingerprint(sched, reports)
     if not o.force and not o.reprocess:
-        if last.get("status") == "ok":
-            return "already_processed", "ok"
+        if last.get("status") in DONE:
+            return "already_processed", last.get("status")
         if last.get("status") == "stopped" and last.get("fingerprint") == fp:
             return "stopped_before", f"stopped at '{last.get('stopped_at')}' - same upload, not run again " \
                                      f"(fix it, then: --survey {sid} --force)"
@@ -157,6 +179,10 @@ def main(args=None):
     o = ap.parse_args(args)
     if o.force and not o.survey:
         ap.error("--force only together with --survey")
+    from pipeline.settings import ALL_STAGES
+    for flag in ("start", "end"):
+        if getattr(o, flag) and getattr(o, flag) not in ALL_STAGES:
+            ap.error(f"--{'from' if flag == 'start' else 'to'}: one of {ALL_STAGES}")
 
     cfg = WfmSettings(o.db)
     work = cfg.work_dir
@@ -196,7 +222,7 @@ def main(args=None):
             continue
         last = state.get(sid)
         fp = metadata.fingerprint(item["schedule"], item["reports"])
-        reason = "forced" if o.force else "again" if last.get("status") == "ok" else \
+        reason = "forced" if o.force else "again" if last.get("status") in DONE else \
             "retry" if last.get("status") in ("failed", "stopped", "running") else "new"
         log(f"  {reason.upper():7} {sid}  UPC {d['upc']}  zone {d['zone']}  phase {d['phase']}  cycle {d['cycle']}  "
             f"upload {upload['files']} file(s) {upload['deliverables']}")
@@ -224,22 +250,23 @@ def main(args=None):
             bad += 1
             log(f"  FAILED {sid}: migrate: {type(e).__name__}: {e}")
             continue
-        code, folder, why = run_survey(cfg, d, o)
+        code, folders, why, warnings = run_survey(cfg, d, o)
         minutes = round((datetime.now() - started).total_seconds() / 60, 1)
         if code == 2:                                            # settings problem: same for every survey
             state.put(sid, status="failed", exit_code=code, finished_at=now(), minutes=minutes,
                       note="run.py: settings problem (see the output above)")
             log("  run.py reported a settings problem - trigger stopped (fix .env, then run again)")
             return 1
-        status = "ok" if code == 0 else "stopped" if code == 1 and why else "failed"
-        note = (f"{manifest['unreadable_count']} file(s) of the upload could not be copied" if manifest["unreadable_count"]
-                else None)
+        status = ("warnings" if warnings else "ok") if code == 0 else \
+            "stopped" if code == 1 and why and "exit code" not in why else "failed"
+        note = "; ".join(([f"{manifest['unreadable_count']} file(s) of the upload could not be copied"]
+                          if manifest["unreadable_count"] else []) + [f"warning passed: {w}" for w in warnings]) or None
         state.put(sid, status=status, exit_code=code, finished_at=now(), minutes=minutes, stopped_at=why,
-                  run_log=str(folder) if folder else None, note=note)
+                  run_log=", ".join(folders) or None, note=note)
         counts[status] = counts.get(status, 0) + 1
-        bad += status != "ok"
-        log(f"  DONE {sid}: {status.upper()} (run.py exit {code})" + (f" - {why}" if why else "")
-            + (f"  log {folder}" if folder else ""))
+        bad += status not in DONE
+        log(f"  DONE {sid}: {status.upper()} (exit {code})" + (f" - {why}" if why else "")
+            + (f" | {len(warnings)} warning(s) passed" if warnings else ""))
 
     log(f"trigger finished: {counts}")
     return 1 if bad else 0

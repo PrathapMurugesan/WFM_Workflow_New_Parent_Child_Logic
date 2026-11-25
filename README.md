@@ -3,9 +3,11 @@
 One repository, one settings file, one command for the whole flow:
 
 ```
-raw deliverables (S3) ─► bronze ─► silver ─► images ─► push_silver ─► gold ─► push_gold
-                          (S3)      (S3)      CDN urls   DLM tables      (S3)    ris_view_kpi /
-                                              in silver  in the DB               ris_trends_kpi in the DB
+raw deliverables (S3) ─► bronze ─► silver ─► images ─► gold ─► push_silver ─► push_gold
+                          (S3)      (S3)      CDN urls   (S3)    DLM tables      ris_view_kpi /
+                                              in silver          in the DB       ris_trends_kpi in the DB
+
+Every S3 layer is built first; the database is written only after gold (push_silver, then push_gold).
 ```
 
 | Folder | Stage | Per | What it does |

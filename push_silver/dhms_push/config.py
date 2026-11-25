@@ -59,6 +59,12 @@ SURVEY_COLUMNS = ["phase", "cycle"]
 # geometry_child.parent_id = '<UPC>_geometry_parent' (geometry is per road, not per phase / cycle).
 SCOPE_BY_COLUMN = {"geometry_child": ("parent_id", "{upc}_geometry_parent")}
 
+# Foreign keys: a value whose referenced row is neither in the database nor inserted by this push is set to NULL
+# when the column allows NULL (WARNING in the report), e.g. master_rutting_child_10m.parent_id ->
+# master_rutting_parent.defect_id for children of a non-breaching parent (no defect_id). False: such values are
+# BLOCKERS, nothing is pushed. A NOT NULL foreign key column is always a BLOCKER. (dhms_push/fk_fix.py)
+NULL_UNMATCHED_FK = True
+
 # Silver writes some text columns as lists (e.g. image_urls); into a text column they go joined with this.
 LIST_SEPARATOR = ", "
 INSERT_PAGE_SIZE = 1000

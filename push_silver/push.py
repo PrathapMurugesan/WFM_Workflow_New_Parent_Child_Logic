@@ -10,7 +10,10 @@ What happens:
  2. Looks the UPC up in the project master (MASTER_PROJECT_TABLE, default master_upc_project) OF THE SAME
     DATABASE and writes its ids (project_id, region_id, piu_id, state_id, zone_id, contractor_id, ae_ie_id)
     into every table that has those columns — so the ids always belong to the database you push to.
- 3. Checks every table against the silver data (BLOCKER / WARNING / INFO) and writes a report.
+ 3. Foreign keys: a value whose referenced row is in neither the database nor this push is set to NULL when the
+    column allows NULL (config.NULL_UNMATCHED_FK, WARNING in the report; e.g. rutting child parent_id of a
+    non-breaching parent). Then checks every table against the silver data (BLOCKER / WARNING / INFO) and writes
+    a report.
  4. Only with --apply and no BLOCKER: one transaction for all tables —
        replace (default): delete this survey's rows (UPC + phase + cycle) in each table, then insert;
        append:            insert only.
@@ -34,6 +37,7 @@ from sqlalchemy import text
 
 from dhms_push import config
 from dhms_push.compare import compare
+from dhms_push.fk_fix import resolve as resolve_foreign_keys
 from dhms_push.prepare import rows_for_insert
 from dhms_push.project_ids import apply_ids, lookup_ids
 from dhms_push.schema import create_table_sql, read_table_def
@@ -97,18 +101,24 @@ def main() -> int:
                         "issue": f"project id not available: {m}"} for m in ids["missing"]]
         all_issues += run_issues
 
-        for table, name, group in targets:
+        filled, scopes = {}, {}
+        for table, name, group in targets:                  # 1) definitions, ids, scopes of every table
             t = read_table_def(conn, db.schema, table)
             defs[table] = t
             with open(os.path.join(out, "ddl", f"{table}.sql"), "w", encoding="utf-8") as f:
                 f.write(create_table_sql(t))
-            df = frames[table]
-            filled = []
-            if df is not None and t.exists:
-                df, filled = apply_ids(table, df, [c["name"] for c in t.columns], ids["ids"])
-                prepared[table] = df
-            scope = scope_sql(table, [c["name"] for c in t.columns], survey) if t.exists else None
-            cols, issues = compare(t, df, conn, scope=scope, mode=a.mode)
+            filled[table] = []
+            if frames[table] is not None and t.exists:
+                prepared[table], filled[table] = apply_ids(table, frames[table], [c["name"] for c in t.columns],
+                                                           ids["ids"])
+            scopes[table] = scope_sql(table, [c["name"] for c in t.columns], survey) if t.exists else None
+        fk_issues = resolve_foreign_keys(conn, db.schema, defs, prepared, scopes, a.mode)   # 2) foreign keys
+
+        for table, name, group in targets:                  # 3) check every table
+            t, scope = defs[table], scopes[table]
+            df = prepared.get(table, frames[table])
+            cols, issues = compare(t, df, conn, scope=scope, mode=a.mode, pushed=prepared)
+            issues = [i for i in fk_issues if i["table"] == table] + issues
             all_cols += cols
             all_issues += issues
             existing = None
@@ -123,7 +133,7 @@ def main() -> int:
                  "to_delete": (existing or 0) if (a.mode == "replace" and df is not None) else 0,
                  "to_insert": 0 if df is None else len(df),
                  "survey_rows_found_by": scope_note(table, [c["name"] for c in t.columns]) if t.exists else "",
-                 "ids_filled": ", ".join(filled),
+                 "ids_filled": ", ".join(filled[table]),
                  "blockers": int((sev == "BLOCKER").sum()), "warnings": int((sev == "WARNING").sum()),
                  "silver_path": paths[table]}
             summary.append(s)

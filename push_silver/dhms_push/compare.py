@@ -136,11 +136,12 @@ def _key(v):
 
 
 def compare(t: TableDef, df: pd.DataFrame | None, conn: Connection | None, db_checks: bool = True,
-            scope=None, mode: str = "replace"):
+            scope=None, mode: str = "replace", pushed: dict | None = None):
     """Returns (column rows, issue rows). Issue severity: BLOCKER = the insert would fail;
     WARNING = it would insert but the data would not be what you expect; INFO = for information.
     scope = (SQL condition, params) selecting this survey's rows in the table (see survey.scope_sql);
-    mode 'replace' deletes those rows before the insert, 'append' keeps them."""
+    mode 'replace' deletes those rows before the insert, 'append' keeps them.
+    pushed = {table: frame} of this push: a foreign key value inserted by the push itself counts as found."""
     cols, issues = [], []
 
     def issue(sev, column, what, n=None, examples=None):
@@ -288,6 +289,9 @@ def compare(t: TableDef, df: pd.DataFrame | None, conn: Connection | None, db_ch
             found |= {_key(r[0]) for r in conn.execute(text(
                 f'SELECT DISTINCT "{ref}" FROM "{fk["ref_schema"]}"."{fk["ref_table"]}" WHERE "{ref}"::text = ANY(:v)'),
                 {"v": [str(x) for x in part]})}
+        if pushed:
+            from .fk_fix import pushed_values
+            found |= pushed_values(pushed, t.schema, fk)
         miss = [v for v in vals if v not in found and str(v) not in {str(f) for f in found}]
         if miss:
             rows = int(df[col].map(lambda v: not _is_null(v) and (_key(v) in miss or str(_key(v)) in map(str, miss))).sum())

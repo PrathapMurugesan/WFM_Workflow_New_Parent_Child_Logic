@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 SID = "57d89b35-0ceb-4bcc-b35a-fb947c0f8268"
+STAGES = ["bronze", "silver", "images", "gold", "push_silver", "push_gold"]
 UPC = "N/04018/05002/AP"
 
 
@@ -52,8 +53,10 @@ FAKE_RUN = textwrap.dedent("""
     log_dir = Path(os.environ["LOG_DIR"])
     run = log_dir / f"run_{datetime.now():%Y%m%d_%H%M%S_%f}"
     run.mkdir(parents=True)
-    code = int(os.environ.get("FAKE_RUN_CODE", "0"))
-    text = "!! STOPPED: bronze N/04018/05002/AP: warning (exit 2)\\n" if code == 1 else "Every step OK\\n"
+    stage = sys.argv[sys.argv.index("--only") + 1]
+    codes = dict(x.split("=") for x in os.environ.get("FAKE_RUN_CODES", "").split(",") if x)
+    code = int(codes.get(stage, os.environ.get("FAKE_RUN_CODE", "0")))
+    text = f"!! STOPPED: {stage} N/04018/05002/AP: warning (exit 2)\\n" if code == 1 else "Every step OK\\n"
     (run / "pipeline.log").write_text(text)
     rec = Path(os.environ["FAKE_RUN_RECORD"])
     calls = json.loads(rec.read_text()) if rec.exists() else []
@@ -122,16 +125,17 @@ def test_trigger_runs_new_survey_once(env):
     t = env["trigger"]
     assert t.main([]) == 0
     calls = env["calls"]()
-    assert len(calls) == 1
-    assert calls[0]["argv"] == ["--scheduled", "--zone", "D", "--phase", "1", "--cycle", "2", "--upc", UPC]
+    assert [c["argv"][2] for c in calls] == STAGES                         # one run.py per stage, the DB last
+    assert calls[0]["argv"] == ["--scheduled", "--only", "bronze", "--zone", "D", "--phase", "1", "--cycle", "2",
+                                "--upc", UPC]
     assert calls[0]["raw"].rstrip("/") == str(env["stage"]).replace("\\", "/").rstrip("/") or \
         calls[0]["raw"].rstrip("/") == str(env["stage"]).rstrip("/")
     s = env["state"]()[SID]
     assert s["status"] == "ok" and s["upc"] == UPC and s["run_log"]
     assert t.main([]) == 0                       # processed: not again
-    assert len(env["calls"]()) == 1
+    assert len(env["calls"]()) == 6
     assert t.main(["--survey", SID, "--force"]) == 0
-    assert len(env["calls"]()) == 2
+    assert len(env["calls"]()) == 12
 
 
 def test_not_ready_is_skipped(env):
@@ -142,6 +146,7 @@ def test_not_ready_is_skipped(env):
 
 def test_stopped_runs_again_only_after_a_new_upload(env, monkeypatch):
     t = env["trigger"]
+    monkeypatch.setenv("WFM_CONTINUE_ON_WARNING", "")                  # strict: every warning stops
     monkeypatch.setenv("FAKE_RUN_CODE", "1")
     assert t.main([]) == 1
     s = env["state"]()[SID]
@@ -151,7 +156,7 @@ def test_stopped_runs_again_only_after_a_new_upload(env, monkeypatch):
     env["items"][0] = schedule(updated="2026-11-22T09:00:00")      # vendor uploaded again
     monkeypatch.setenv("FAKE_RUN_CODE", "0")
     assert t.main([]) == 0
-    assert len(env["calls"]()) == 2 and env["state"]()[SID]["status"] == "ok"
+    assert len(env["calls"]()) == 7 and env["state"]()[SID]["status"] == "ok"
 
 
 def test_failed_is_retried_up_to_max_attempts(env, monkeypatch):
@@ -161,6 +166,24 @@ def test_failed_is_retried_up_to_max_attempts(env, monkeypatch):
         t.main([])
     assert len(env["calls"]()) == 3              # WFM_MAX_ATTEMPTS = 3
     assert env["state"]()[SID]["status"] == "failed"
+
+
+def test_data_warnings_are_passed_and_recorded(env, monkeypatch):
+    """bronze / silver warnings (missing CRRI workbook, DQ vs D2) do not stop the survey; the DB stages still run."""
+    monkeypatch.setenv("FAKE_RUN_CODES", "bronze=1,silver=1")
+    assert env["trigger"].main([]) == 0
+    assert [c["argv"][2] for c in env["calls"]()] == STAGES
+    s = env["state"]()[SID]
+    assert s["status"] == "warnings" and s["note"].count("warning passed") == 2
+    assert env["trigger"].main([]) == 0 and len(env["calls"]()) == 6       # processed: not again
+
+
+def test_warning_outside_the_list_stops(env, monkeypatch):
+    monkeypatch.setenv("FAKE_RUN_CODES", "gold=1")
+    assert env["trigger"].main([]) == 1
+    assert [c["argv"][2] for c in env["calls"]()] == ["bronze", "silver", "images", "gold"]   # no DB push
+    s = env["state"]()[SID]
+    assert s["status"] == "stopped" and s["stopped_at"].startswith("gold")
 
 
 def test_dry_run_runs_nothing(env):

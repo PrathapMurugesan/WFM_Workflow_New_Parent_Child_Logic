@@ -58,9 +58,9 @@ def run(tmp, *args, **rc):
 def test_scheduled_all_ok_runs_every_stage_in_order(tmp_path):
     p, calls, out = run(tmp_path, "--scheduled")
     assert p.returncode == 0, out
-    assert calls == ["bronze", "bronze", "silver", "silver", "images", "images",
+    assert calls == ["bronze", "bronze", "silver", "silver", "images", "images", "gold", "gold",
                      "push_silver", "push_silver write", "push_silver", "push_silver write",
-                     "gold", "gold", "push_gold", "push_gold write"]
+                     "push_gold", "push_gold write"]
     assert "Every step OK" in out
 
 
@@ -78,17 +78,17 @@ def test_scheduled_stops_on_bronze_warning(tmp_path):
 
 def test_scheduled_stops_when_db_check_finds_blockers(tmp_path):
     p, calls, out = run(tmp_path, "--scheduled", push_check=1)
-    assert p.returncode == 1 and "push_silver write" not in calls and "gold" not in calls
+    assert p.returncode == 1 and "gold" in calls and "push_silver write" not in calls and "push_gold" not in calls
 
 
 def test_failed_write_stops_the_run(tmp_path):
     p, calls, out = run(tmp_path, "--scheduled", push_write=1)
-    assert p.returncode == 1 and calls[-1] == "push_silver write" and "gold" not in calls
+    assert p.returncode == 1 and calls[-1] == "push_silver write" and "push_gold" not in calls
 
 
 def test_gold_failure_stops_before_its_push(tmp_path):
     p, calls, out = run(tmp_path, "--scheduled", gold=1)
-    assert p.returncode == 1 and calls[-1] == "gold" and "push_gold" not in calls
+    assert p.returncode == 1 and calls[-1] == "gold" and "push_silver" not in calls and "push_gold" not in calls
 
 
 def test_no_write_runs_checks_but_never_writes(tmp_path):

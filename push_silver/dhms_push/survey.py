@@ -56,7 +56,14 @@ def scope_sql(table: str, db_columns: list, survey: dict, style: str = "sqlalche
     if ucol is None:
         rule = config.SCOPE_BY_COLUMN.get(table)
         if rule and rule[0] in db_columns:
-            return f'"{rule[0]}"::text = {ph("scope_value")}', {"scope_value": rule[1].format(upc=upc_underscore(survey["upc"]))}
+            def n(v):                                    # 1 / '1' / 1.0 -> '1'; unknown -> any number
+                try:
+                    return str(int(float(v)))
+                except (TypeError, ValueError):
+                    return "[0-9]+"
+            value = rule[1].format(upc=upc_underscore(survey["upc"]), phase=n(survey.get("phase")),
+                                   cycle=n(survey.get("cycle")))
+            return f'"{rule[0]}"::text ~ {ph("scope_value")}', {"scope_value": value}
         return None
     parts = [f"regexp_replace(lower(\"{ucol}\"::text), '[^0-9a-z]', '', 'g') = {ph('upc_key')}"]
     params = {"upc_key": upc_key(survey["upc"])}
@@ -70,7 +77,7 @@ def scope_sql(table: str, db_columns: list, survey: dict, style: str = "sqlalche
 def scope_note(table: str, db_columns: list) -> str:
     if not any(c in db_columns for c in config.UPC_COLUMNS) and table in config.SCOPE_BY_COLUMN:
         col, val = config.SCOPE_BY_COLUMN[table]
-        return f"{col} = {val} (all rows of the UPC)"
+        return f"{col} matches {val} (this survey, + rows written before the phase / cycle id prefix)"
     used = [c for c in config.UPC_COLUMNS if c in db_columns][:1] + [c for c in config.SURVEY_COLUMNS if c in db_columns]
     missing = [c for c in config.SURVEY_COLUMNS if c not in db_columns]
     return ", ".join(used) + (f" (no {', '.join(missing)} column: ALL rows of the UPC)" if missing else "")

@@ -56,8 +56,9 @@ KEEP_SILVER_VALUE = {("geometry_parent", "project_id")}
 UPC_COLUMNS = ["upc_code", "upc"]
 SURVEY_COLUMNS = ["phase", "cycle"]
 # Tables without a UPC column: their rows are found by another column holding a UPC-based value.
-# geometry_child.parent_id = '<UPC>_geometry_parent' (geometry is per road, not per phase / cycle).
-SCOPE_BY_COLUMN = {"geometry_child": ("parent_id", "{upc}_geometry_parent")}
+# geometry_child.parent_id = '<UPC>_P<phase>C<cycle>_geometry_parent' (silver id prefix); the rule is a regular
+# expression, so rows written before the phase / cycle prefix ('<UPC>_geometry_parent') are replaced too.
+SCOPE_BY_COLUMN = {"geometry_child": ("parent_id", "^{upc}(_P{phase}C{cycle})?_geometry_parent$")}
 
 # Foreign keys: a value whose referenced row is neither in the database nor inserted by this push is set to NULL
 # when the column allows NULL (WARNING in the report), e.g. master_rutting_child_10m.parent_id ->

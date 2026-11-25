@@ -48,7 +48,7 @@ def build(prj):
     sev_t = pd.Series(p['severity'], dtype=object).fillna('').astype(str).str.strip().str.lower()
     bf = np.where(sev_t.apply(lambda v: any(v.startswith(w) for w in words)).values, 0, 1)
 
-    o = pd.DataFrame({'id': [f"{prj.upc}_{TABLE}_{q:06d}" for q in seq]})
+    o = pd.DataFrame({'id': [f"{prj.id_prefix}_{TABLE}_{q:06d}" for q in seq]})
     o['defect_id'] = [f"D/{prj.survey_date_str}/N/{prj.upc}/{int(s)}/Pothole/{q:04d}" for s, q in zip(start, seq)]
     o['display_defect_id'] = o['defect_id']
     o['source_defect_id'] = o['record_id'] = [f"pothole_{q:06d}" for q in seq]

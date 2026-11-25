@@ -182,7 +182,7 @@ def build_level(prj, table, level):
         unit = (prj.thr_unit(std, 'cracking') or '%').lower()
         probe = s['crack_sqm'] if 'sq' in unit else v
         bf = breach(probe, prj.thr[std]['cracking'], prj.thr_op(std, 'cracking')).values
-        r['id'] = [f"{prj.upc}_{table}_{'' if std == 'ca' else 'irc_'}{q:06d}" for q in seq]
+        r['id'] = [f"{prj.id_prefix}_{table}_{'' if std == 'ca' else 'irc_'}{q:06d}" for q in seq]
         if std == 'irc':
             r['record_id'] += '_irc'
             r['source_defect_id'] += '_irc'

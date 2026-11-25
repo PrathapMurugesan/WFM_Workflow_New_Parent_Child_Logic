@@ -61,7 +61,7 @@ def parent_cols(df, prj, lanes, starts, level):
     ps = starts // b * b
     df['parent_start_chainage'] = ps.values
     df['parent_end_chainage'] = (ps + b).values
-    df['parent_id'] = [f"{prj.upc}_{l}_{int(p)}_{int(p) + b}" if l is not None and p == p else None
+    df['parent_id'] = [f"{prj.id_prefix}_{l}_{int(p)}_{int(p) + b}" if l is not None and p == p else None
                        for l, p in zip(lanes, ps)]
     return df
 
@@ -261,7 +261,7 @@ def build_linear_table(prj, defect, level):
         r = out.copy()
         bf = _breach(prj, defect, metric, bi, std).values
         sfx = '' if std == 'ca' else 'irc_'
-        r['id'] = [f"{prj.upc}_{tbl}_{sfx}{q:06d}" for q in seq]
+        r['id'] = [f"{prj.id_prefix}_{tbl}_{sfx}{q:06d}" for q in seq]
         if std == 'irc':
             r['record_id'] = r['record_id'] + '_irc'
             r['source_defect_id'] = r['source_defect_id'] + '_irc'

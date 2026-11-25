@@ -114,7 +114,7 @@ def side_parent_cols(df, prj, block=None, by='side'):
     key = df['side'] if by == 'side' else df['lane'].astype(str).str.upper()
     df['parent_start_chainage'] = b
     df['parent_end_chainage'] = b + block
-    df['parent_id'] = [f"{prj.upc}_{s}_{int(k)}_{int(k) + block}" if s is not None and pd.notna(k) else None
+    df['parent_id'] = [f"{prj.id_prefix}_{s}_{int(k)}_{int(k) + block}" if s is not None and pd.notna(k) else None
                        for s, k in zip(key, b)]
     return df
 
@@ -248,12 +248,12 @@ def build_side_parent(prj, defect, table=None, src_key=None, block=None, by='sid
         bf = int(lane_bf.max()) if lane_bf.notna().any() else None       # no D2 threshold → NULL (NSV rule)
         worst = g.loc[mv.idxmax()] if mv.notna().any() else first
         pav = sorted(set(g['pavement_type'].dropna()))
-        pid = f"{prj.upc}_{grp}_{km}_{km + KM}"
+        pid = f"{prj.id_prefix}_{grp}_{km}_{km + KM}"
         _sum = lambda c: float(num(g[c]).fillna(0).sum()) if c in g else 0.0
         thr = num(g['threshold_value']).dropna()
         rec = first.to_dict()
         rec.update({
-            'id': f"{prj.upc}_{table}_{grp}_{km}", 'collection_name': table, 'level': 'parent',
+            'id': f"{prj.id_prefix}_{table}_{grp}_{km}", 'collection_name': table, 'level': 'parent',
             'lane': grp, 'side': side, 'direction': 'Increasing' if side == 'LHS' else 'Decreasing',
             'parent_id': pid, 'record_id': pid, 'source_defect_id': pid,
             'defect_id': pid if bf == 1 else None, 'display_defect_id': None,

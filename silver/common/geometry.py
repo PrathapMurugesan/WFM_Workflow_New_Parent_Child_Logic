@@ -59,7 +59,7 @@ def build_geometry(prj):
     if cached is not None:
         return cached
     mc = built_table(prj, 'master_chainage')
-    parent_id = f"{prj.upc}_geometry_parent"
+    parent_id = f"{prj.id_prefix}_geometry_parent"
     mc = mc if mc is not None else pd.DataFrame()
 
     nh = standardize_nh(_first(mc, 'nh_number')) or 'NH-Unknown'
@@ -83,7 +83,7 @@ def build_geometry(prj):
             'end_longitude': x[f'{p}_end_long'].astype(float).values}))
     child = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame(columns=CHILD_COLUMNS)
     if len(child):
-        child['id'] = [f"{prj.upc}_{l}_{int(s)}_{int(e)}"
+        child['id'] = [f"{prj.id_prefix}_{l}_{int(s)}_{int(e)}"
                        for l, s, e in zip(child['lane'], child['start_chainage'], child['end_chainage'])]
         child['child_id'] = child['id']
         child['parent_id'] = parent_id

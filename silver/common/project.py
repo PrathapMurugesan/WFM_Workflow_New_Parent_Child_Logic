@@ -510,6 +510,9 @@ class Project:
         self.upc = re.sub(r'[-/\s]+', '_', base)              # N_02017_03001_RJ
         self.upc_folder = self.upc.replace('_', '-')          # N-02017-03001-RJ (defect_rules.json keys)
         self.upc_slash = self.upc.replace('_', '/')           # N/02017/03001/RJ
+        # every row id / parent link of the silver tables starts with this: the UPC + phase + cycle, so the ids of
+        # two surveys of one road (another phase / cycle) never collide:  N_04018_05002_AP_P1C2_master_..._LHS_365000
+        self.id_prefix = f"{self.upc}_P{self.phase}C{self.cycle}"
 
         self.run_date = datetime.today().date()
         self.run_ts = pd.Timestamp(self.run_date)

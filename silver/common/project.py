@@ -827,6 +827,15 @@ class Project:
                     v = num(d2[c]).dropna()
                     out = float(v.mode().iloc[0]) if len(v) else None
                     break
+        if out is None and defect != 'overall':
+            # newer D2 template: no 'Reporting Interval' columns on the comparison sheets (per-lane 'Length'
+            # columns instead) -> the interval of the defect in D2 'Inputs (Thresholds)' (as bronze intervals.py)
+            try:
+                inp, _ = read_inputs_thresholds(self)
+                iv = (inp.get((key[0].lower(), defect)) or {}).get('interval_m')
+                out = float(iv) if iv else None
+            except Exception:                       # noqa: BLE001 - no / unreadable sheet: stays None
+                out = None
         cache[key] = out
         return out
 

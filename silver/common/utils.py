@@ -65,3 +65,20 @@ def coalesce(*series):
     for s in series[1:]:
         out = out.where(out.notna(), s)
     return out
+
+
+def join_image_names(names):
+    """Image file names -> one image_name cell: joined with config.IMAGE_SEPARATOR, at most
+       config.IMAGE_NAME_MAX_CHARS characters (only whole names, in order). None when there is no name."""
+    import config
+    out, size = [], 0
+    for n in names or []:
+        if n is None or n != n or str(n) == '':
+            continue
+        n = str(n)
+        add = len(n) + (len(config.IMAGE_SEPARATOR) if out else 0)
+        if size + add > config.IMAGE_NAME_MAX_CHARS:
+            break
+        out.append(n)
+        size += add
+    return config.IMAGE_SEPARATOR.join(out) if out else None

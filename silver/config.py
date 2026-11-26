@@ -188,6 +188,8 @@ MIN_LANE_FILL = 0.01
 #   Pothole: all distinct image names of the potholes on the same lane + chainage (NHAI One sheet).
 #   Several names in one cell are joined with IMAGE_SEPARATOR; image_urls holds them as a list.
 IMAGE_SEPARATOR = ', '
+# image_name is varchar(512) in the DB: a cell keeps the first whole names that fit (image_urls keeps every image).
+IMAGE_NAME_MAX_CHARS = int(_os.environ.get('NSV_IMAGE_NAME_MAX_CHARS', '512'))
 CRACK_IMAGE_TOLERANCE_M = 5.0
 
 # ── master_pothole breach_flag / road_condition ──────────────────────────────

@@ -39,7 +39,7 @@ import pandas as pd
 
 import config
 from common.output import built_table
-from common.utils import num
+from common.utils import num, join_image_names
 
 # Column list of the DLM defect tables (fixed order). Columns NSV does not produce are written as NULL.
 BASE_COLUMNS = """
@@ -329,7 +329,7 @@ def build_side_parent(prj, defect, table=None, src_key=None, block=None, by='sid
         if defect == 'cracking':
             rec['cracking_pct'] = rec['metric_value']                  # DLM: cracking_pct = side value
             names, urls = _group_image_pairs(g)                        # NSV image names / paths of the lanes
-            rec['image_name'] = config.IMAGE_SEPARATOR.join(names) if names else None
+            rec['image_name'] = join_image_names(names)                 # whole names, <= IMAGE_NAME_MAX_CHARS
             rec['image_urls'] = urls or None
         rows.append(rec)
     if not rows:

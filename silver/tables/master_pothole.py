@@ -21,7 +21,7 @@ import pandas as pd
 from common.project import read_dates
 
 import config
-from common.utils import standardize_nh
+from common.utils import standardize_nh, join_image_names
 from common.defects import pothole_rows
 from common.segments import common_cols, parent_cols
 from common.output import run_table, standalone
@@ -89,7 +89,7 @@ def build(prj):
             lst = joined.setdefault(k, [])
             if im not in lst:
                 lst.append(im)
-    o['image_name'] = [config.IMAGE_SEPARATOR.join(joined[k]) if k in joined else None for k in key]
+    o['image_name'] = [join_image_names(joined.get(k)) for k in key]
     o['image_urls'] = [list(joined[k]) if k in joined else None for k in key]
     md = p['max_depth']
     o['nsv'] = [json.dumps({"area_sqm": a, "max_depth_mm": m})

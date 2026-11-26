@@ -22,7 +22,7 @@ import numpy as np
 import pandas as pd
 
 import config
-from common.utils import standardize_nh
+from common.utils import standardize_nh, join_image_names
 from common.defects import crack_condition, cracking_rows, map_crack_images
 from common.segments import common_cols, defect_ids, parent_cols
 from common.project import breach
@@ -162,7 +162,7 @@ def build_level(prj, table, level):
     o['datetime'] = pd.to_datetime(s['datetime']).values
     o['observed_at'] = o['datetime']
     names, paths = _images_for_level(prj, s, level)
-    o['image_name'] = [config.IMAGE_SEPARATOR.join(x) if x else None for x in names]   # file names, comma separated
+    o['image_name'] = [join_image_names(x) for x in names]   # file names, comma separated, <= IMAGE_NAME_MAX_CHARS
     o['image_urls'] = [list(x) if x else None for x in paths]                         # image paths
     o['nsv'] = [json.dumps({"condition": c, "cracking": x}) for c, x in zip(cond, v.where(v.notna(), None))]
     o['direction'] = ctx['direction'].values

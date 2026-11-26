@@ -231,7 +231,7 @@ def load_silver(root, name, columns=None, keep_upcs=(), scope=None):
 
 
 # Columns of an optional silver table that no survey of the run has (config.OPTIONAL_SILVER_TABLES)
-EMPTY_TABLE_COLUMNS = ["id", "upc", "zone", "phase", "cycle", "source_system", "detected_on", "lane", "threshold_name",
+EMPTY_TABLE_COLUMNS = ["id", "display_defect_id", "upc", "zone", "phase", "cycle", "source_system", "detected_on", "lane", "threshold_name",
                        "pavement_type", "parent_id", "breach_flag", "start_chainage", "end_chainage", "metric_value",
                        "threshold_value", "pci"]
 

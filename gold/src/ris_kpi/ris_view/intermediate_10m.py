@@ -40,6 +40,8 @@ def ca_only(child, irc_only_threshold, name):
 
 
 def _by_key(df, cols):
+    if df.empty:                       # 0 rows: agg would return a DataFrame, not a Series
+        return pd.Series([], index=df.index, dtype="string")
     return df[cols].astype("string").fillna("").agg("|".join, axis=1)
 
 

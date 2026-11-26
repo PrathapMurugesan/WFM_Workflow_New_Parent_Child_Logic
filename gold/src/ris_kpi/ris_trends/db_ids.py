@@ -17,7 +17,8 @@ import uuid
 
 import pandas as pd
 
-from ris_kpi.common.db_ids import SURVEY_ID_KEYS, survey_id_lookup
+from ris_kpi import config
+from ris_kpi.common.db_ids import fill_survey_id_placeholders, SURVEY_ID_KEYS, survey_id_lookup
 from ris_kpi.common.keys import to_str_id as text_id, upc_slash
 
 log = logging.getLogger(__name__)
@@ -76,6 +77,7 @@ def add_db_ids(df, db_tables, survey_id_fallback=False):
     # survey_id on upc + phase + cycle (no date); several ids -> SURVEY_ID_FALLBACK (common/db_ids.py)
     survey = survey_id_lookup(survey_map_table, db_tables.get("wfm_survey_schedule"), survey_id_fallback)
     df = _join(df, survey, SURVEY_ID_KEYS, "survey_id", SURVEY_KEYS)
+    df = fill_survey_id_placeholders(df, config.SURVEY_ID_PLACEHOLDER)
 
     df["id"] = [str(uuid.uuid4()) for _ in range(len(df))]
     return df.drop(columns=["_upc", "_src", "_phase", "_cycle"])

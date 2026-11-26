@@ -5,6 +5,7 @@ and the survey key.
 Every lookup is de-duplicated on its key (keep first), so the joins never add rows; a row whose id is not found is
 kept with an empty id.
 """
+import hashlib
 import logging
 
 import pandas as pd
@@ -60,6 +61,29 @@ def survey_source_lookup(master_survey_system, id_col):
 # wfm_survey_schedule row (id = survey_schedule_id, same upc) with the first current_status of this list
 SURVEY_STATUS_PRIORITY = ["Survey Final Approved", "Validation in Progress"]
 SURVEY_ID_KEYS = ["_upc", "_phase", "_cycle"]
+
+
+def survey_id_placeholder(upc, phase, cycle):
+    """'N_01002_01001_GJ_P1_C1_<12 hex>': same upc + phase + cycle -> same text (sha1 of 'upc|phase|cycle')."""
+    upc, phase, cycle = (str(x or "").strip() for x in (upc, phase, cycle))
+    digest = hashlib.sha1(f"{upc}|{phase}|{cycle}".encode("utf-8")).hexdigest()[:12]
+    return f"{upc.replace('/', '_')}_P{phase}_C{cycle}_{digest}"
+
+
+def fill_survey_id_placeholders(df, enabled):
+    """Rows without survey_id (needs the _upc / _phase / _cycle keys) get survey_id_placeholder when enabled."""
+    if not enabled or "survey_id" not in df.columns or df.empty:
+        return df
+    missing = df["survey_id"].isna() | (df["survey_id"].astype("string").str.strip() == "")
+    if missing.any():
+        df = df.copy()
+        df["survey_id"] = df["survey_id"].astype(object)
+        df.loc[missing, "survey_id"] = [survey_id_placeholder(u, p, c) for u, p, c in
+                                        zip(df.loc[missing, "_upc"], df.loc[missing, "_phase"],
+                                            df.loc[missing, "_cycle"])]
+        log.warning("survey_id: %s rows without one got a placeholder (SURVEY_ID_PLACEHOLDER):\n%s", int(missing.sum()),
+                    df.loc[missing, ["_upc", "_phase", "_cycle", "survey_id"]].drop_duplicates().to_string(index=False))
+    return df
 
 
 def survey_id_lookup(survey_data_map, wfm_survey_schedule=None, fallback=False):

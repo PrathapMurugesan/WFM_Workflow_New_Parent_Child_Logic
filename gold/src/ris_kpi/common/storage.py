@@ -35,7 +35,9 @@ def dated_dir(root, day):
 
 
 def latest_location(root, name):
-    return join(root, f"{config.LATEST_FOLDER}/{name}.csv")
+    """<root>/<LATEST_FOLDER>/<name>.csv; <root>/<name>.csv when LATEST_FOLDER is empty."""
+    folder = str(config.LATEST_FOLDER or "").strip().strip("/")
+    return join(root, f"{folder}/{name}.csv" if folder else f"{name}.csv")
 
 
 def parent_of(location):

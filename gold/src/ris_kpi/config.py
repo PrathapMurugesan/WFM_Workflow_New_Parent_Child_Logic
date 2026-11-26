@@ -91,6 +91,10 @@ elif STORAGE == "local":
     LATEST_FOLDER = "latest"
 else:
     raise ValueError(f"RIS_KPI_STORAGE must be 's3' or 'local', not {STORAGE!r}")
+# RIS_KPI_LATEST_FOLDER (.env / environment): name of the copy-of-the-newest-run folder in every output root;
+# set but empty = the files directly in the output root (upc_flow: <gold>/Latest_v2/<table>.csv)
+if "RIS_KPI_LATEST_FOLDER" in os.environ:
+    LATEST_FOLDER = os.environ["RIS_KPI_LATEST_FOLDER"].strip().strip("/")
 
 
 # Which silver folders a run reads: <SILVER_INPUT_DIR>/Zone=<zone>/Phase=<phase>/Cycle=<cycle>/UPC=<upc>/...
@@ -110,6 +114,9 @@ DROP_ROWS_WITHOUT_IDS = env_bool("DROP_ROWS_WITHOUT_IDS", True)
 # upc + phase + cycle: True = pick one by wfm_survey_schedule (same upc; current_status 'Survey Final Approved', else
 # 'Validation in Progress'; wfm_survey_schedule is then read from DB_TABLES_DIR), False = leave it empty. Set in .env.
 SURVEY_ID_FALLBACK = env_bool("SURVEY_ID_FALLBACK", True)
+# True = a row still without survey_id gets the placeholder '<UPC>_P<phase>_C<cycle>_<hash>' (the same on every run,
+# so a re-run overwrites it; common/db_ids.fill_survey_id_placeholders). Only for runs not pushed to the DB (upc_flow).
+SURVEY_ID_PLACEHOLDER = env_bool("SURVEY_ID_PLACEHOLDER", False)
 # Set at run time from the settings above (list of {"Zone", "Phase", "Cycle", "UPC"}); None = not resolved yet
 SILVER_SCOPE = None
 

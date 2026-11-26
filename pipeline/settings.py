@@ -70,8 +70,10 @@ class Settings:
         return p if p.is_absolute() else ROOT / p
 
     def stage_env(self) -> dict:
-        """Environment of every stage: every .env value (expanded) + values derived for the stages."""
-        env = dict(self.values)
+        """Environment of every stage: every .env value (expanded) + values derived for the stages. A key also set in
+        the environment keeps the environment's value (as Settings.get), so a caller can override .env for one run
+        (upc_flow: S3_GOLD_OUTPUT_DIR / RIS_KPI_LATEST_FOLDER / SURVEY_ID_PLACEHOLDER)."""
+        env = {k: (os.environ[k] if k in os.environ else v) for k, v in self.values.items()}
         env.update({
             "PYTHON": sys.executable,                                  # bronze / silver scripts use this Python
             "AWS_DEFAULT_REGION": self.get("REGION", "ap-south-1"),

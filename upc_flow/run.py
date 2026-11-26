@@ -166,6 +166,16 @@ def _run_log(log_dir, before):
     return folder, reason
 
 
+def dropped_dates(folder):
+    """['silver: bad date(s) left empty: ...'] from the silver run log (read_dates warnings), [] when none."""
+    f = Path(folder) / "pipeline.log" if folder else None
+    if not f or not f.is_file():
+        return []
+    lines = re.findall(r"WARNING: (\d+ date value\(s\) unreadable or out of [^\n]+)",
+                       f.read_text(encoding="utf-8", errors="replace"))
+    return [f"silver: bad date(s) left empty - {x.strip()}" for x in dict.fromkeys(lines)]
+
+
 def silver_failures(folder):
     """'silver: <n> table run(s) FAILED - <first error>' when the silver run log reports failed tables, else None
     (silver exits 1 for a data-quality warning and for failed tables alike)."""
@@ -257,6 +267,8 @@ def main(argv=None):
             code, folder, why = run_py(["--only", stage, "--zone", sv["zone"], "--phase", sv["phase"],
                                         "--cycle", sv["cycle"], "--upc", sv["upc"]], env, log_dir)
             r["logs"] += [str(folder)] if folder else []
+            if stage == "silver":                     # bad dates the silver run left empty (e.g. '202-07-14')
+                r["warnings"] += dropped_dates(folder)
             failed_tables = silver_failures(folder) if stage == "silver" else None
             if failed_tables:                         # silver wrote no / not all tables: gold must not use it
                 r["status"], r["stopped_at"] = "failed", failed_tables

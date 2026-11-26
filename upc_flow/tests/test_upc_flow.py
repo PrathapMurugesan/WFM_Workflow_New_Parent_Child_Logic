@@ -69,7 +69,7 @@ FAKE = textwrap.dedent("""
     d.mkdir(parents=True)
     why = "warning (exit 1) - scheduled runs stop on warnings" if code == 1 else f"exit code {code}"
     extra = os.environ.get("FAKE_LOG_" + stage.upper(), "")
-    (d / "pipeline.log").write_text(extra + (f"!! STOPPED: {stage} {upc}: {why}\\n" if code else "Every step OK\\n"))
+    (d / "pipeline.log").write_text(extra + (f"!! STOPPED: {stage} {upc}: {why}\\n" if code else "Every step OK\\n"), encoding="utf-8")
     sys.exit(code)
 """)
 
@@ -169,3 +169,13 @@ def test_silver_with_failed_tables_stops_the_survey(fake, monkeypatch):
     assert stages == ["bronze", "silver"]                     # no images, no gold
     res = (sorted((fake / "logs" / "upc_flow").iterdir())[-1] / "results.csv").read_text()
     assert "table run(s) FAILED" in res and "OutOfBoundsDatetime" in res
+
+
+def test_dropped_dates_reported_and_survey_goes_on(fake, monkeypatch):
+    monkeypatch.setenv("FAKE_LOG_SILVER", "  WARNING: 1 date value(s) unreadable or out of 1900-2100 → empty, "
+                                          "e.g. ['202-07-14']\nUPCs: 1 | table runs FAILED: 0 | DQ FAIL: 0\n")
+    assert flow.main(["--upc", "N/08009/04001/GJ"]) == 0
+    stages = [x["args"][x["args"].index("--only") + 1] for x in calls(fake)]
+    assert stages == ["bronze", "silver", "images", "gold"]          # moved forward
+    res = (sorted((fake / "logs" / "upc_flow").iterdir())[-1] / "results.csv").read_text(encoding="utf-8")
+    assert "warnings" in res and "202-07-14" in res

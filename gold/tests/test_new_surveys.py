@@ -171,3 +171,42 @@ def test_old_ris_trends_file_without_phase_is_rejected(tmp_path):
                      "ris_trends_data", date(2026, 11, 1))
     with pytest.raises(ValueError, match="delete it"):
         append.load_existing(tmp_path, "ris_trends_data")
+
+
+def trend_rows(upc, ids, values, created="2026-11-01"):
+    return pd.DataFrame({"id": ids, "upc": upc, "phase": "1", "cycle": "1", "defect_detected_on": "2026-01-05",
+                         "pavement_type": "Asphalt", "roughness_irc_category": ["Good", "Poor", "Fair"][:len(ids)],
+                         "pci_value": values, "created_at": created, "updated_at": created})
+
+
+def test_refresh_replaces_rerun_survey_and_keeps_ids():
+    existing = pd.concat([trend_rows("N/1", ["a1", "a2", "a3"], [1, 1, 1]),
+                          trend_rows("N/2", ["b1", "b2", "b3"], [5, 5, 5])], ignore_index=True)
+    created = trend_rows("N/1", ["new1", "new2", "new3"], [9, 9, 9]).drop(columns=["created_at", "updated_at"])
+    out = append.refresh_ris_trends_data(existing, created, run_time=T1)
+    assert len(out) == 6
+    n1 = out[out["upc"] == "N/1"]
+    assert n1["id"].tolist() == ["a1", "a2", "a3"]                    # same ids -> the DB push updates them
+    assert n1["pci_value"].tolist() == [9, 9, 9]                      # fresh values
+    assert (n1["created_at"] == "2026-11-01").all() and (n1["updated_at"] == T1).all()
+    n2 = out[out["upc"] == "N/2"]
+    assert n2["id"].tolist() == ["b1", "b2", "b3"] and n2["pci_value"].tolist() == [5, 5, 5]   # untouched
+
+
+def test_refresh_adds_new_survey_and_builds_from_scratch():
+    existing = trend_rows("N/1", ["a1", "a2", "a3"], [1, 1, 1])
+    created = trend_rows("N/3", ["c1", "c2", "c3"], [7, 7, 7]).drop(columns=["created_at", "updated_at"])
+    out = append.refresh_ris_trends_data(existing, created, run_time=T1)
+    assert out["id"].tolist() == ["a1", "a2", "a3", "c1", "c2", "c3"]
+    assert append.refresh_ris_trends_data(None, created, run_time=T1)["id"].tolist() == ["c1", "c2", "c3"]
+
+
+def test_surveys_in_counts_distinct_surveys():
+    tables = {"master_roughness_parent": silver(), "master_rutting_parent": silver()}
+    assert append.surveys_in(tables) == 3
+
+
+def test_refresh_setting_from_env(monkeypatch):
+    for value, expected in (("False", False), ("true", True), ("", True)):
+        monkeypatch.setenv("RIS_TRENDS_REFRESH_SURVEYS", value)
+        assert config.env_bool("RIS_TRENDS_REFRESH_SURVEYS", True) is expected

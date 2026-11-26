@@ -27,6 +27,8 @@ log = logging.getLogger(__name__)
 SURVEY_COLUMNS = ["upc", "phase", "cycle", "defect_detected_on"]
 # silver date column per table (the others use detected_on)
 SILVER_DATE_COLUMNS = {"master_chainage": "defect_detected_on"}
+# one survey has 3 rows per pavement type, told apart by roughness_irc_category (Good / Poor / Fair)
+ROW_COLUMNS = SURVEY_COLUMNS + ["pavement_type", "roughness_irc_category"]
 
 
 def load_existing(root, name):
@@ -60,6 +62,47 @@ def keep_new_surveys(tables, existing):
     if new:
         log.info("New surveys (not in ris_trends_data): %s\n  %s", len(new), "\n  ".join(sorted(new)))
     return out, len(new)
+
+
+def _row_key(df):
+    """survey key + pavement_type + roughness_irc_category: one ris_trends_data row of a survey."""
+    extra = [df[c].astype("string").str.strip().fillna("") for c in ROW_COLUMNS[len(SURVEY_COLUMNS):]]
+    return survey_key(df, SURVEY_COLUMNS).str.cat(extra, sep="|")
+
+
+def surveys_in(tables):
+    """Number of surveys (upc + phase + cycle + date) in the silver tables."""
+    keys = set()
+    for name, df in tables.items():
+        keys |= set(survey_key(df, ["upc", "phase", "cycle", SILVER_DATE_COLUMNS.get(name, "detected_on")]).dropna())
+    return len(keys)
+
+
+def refresh_ris_trends_data(existing, created, run_time=None):
+    """existing ris_trends_data with the surveys of `created` replaced by their new rows: a new row that matches a
+    saved row (ROW_COLUMNS) keeps its id and created_at (the DB push updates it instead of adding a second row);
+    updated_at = this run. Surveys not in `created` stay as they are."""
+    run_time = run_time or datetime.now()
+    created = created.assign(created_at=run_time, updated_at=run_time)
+    if existing is None or existing.empty:
+        log.info("ris_trends_data: %s rows, file built from scratch", f"{len(created):,}")
+        return created.reset_index(drop=True)
+    surveys = set(survey_key(created, SURVEY_COLUMNS))
+    redo = survey_key(existing, SURVEY_COLUMNS).isin(surveys).to_numpy()
+    old = existing[redo]
+    if not old.empty and all(c in old.columns for c in ROW_COLUMNS):
+        saved = dict(zip(_row_key(old), zip(old["id"], old["created_at"])))
+        keys = _row_key(created)
+        hit = keys.isin(set(saved)).to_numpy()
+        created["created_at"] = created["created_at"].astype(object)      # saved text kept as written
+        created.loc[hit, "id"] = [saved[k][0] for k in keys[hit]]
+        created.loc[hit, "created_at"] = [saved[k][1] for k in keys[hit]]
+    n_kept = int(created["id"].isin(set(old["id"])).sum()) if "id" in old.columns else 0
+    columns = list(created.columns) + [c for c in existing.columns if c not in created.columns]
+    log.info("ris_trends_data: %s surveys recalculated (%s saved rows replaced, %s rows written, %s keep their id); "
+             "%s rows of other surveys unchanged", len(surveys), f"{int(redo.sum()):,}", f"{len(created):,}",
+             f"{n_kept:,}", f"{int((~redo).sum()):,}")
+    return pd.concat([existing[~redo].reindex(columns=columns), created.reindex(columns=columns)], ignore_index=True)
 
 
 def append_ris_trends_data(existing, created, run_time=None):

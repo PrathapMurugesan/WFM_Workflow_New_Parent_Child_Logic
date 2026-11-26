@@ -24,7 +24,8 @@ from ris_kpi import config
 from ris_kpi.common.db_tables import load_db_tables
 from ris_kpi.common.storage import latest_location, save_run
 from ris_kpi.config import RisTrends as cfg
-from ris_kpi.ris_trends.append import append_ris_trends_data, keep_new_surveys, load_existing
+from ris_kpi.ris_trends.append import (append_ris_trends_data, keep_new_surveys, load_existing,
+                                       refresh_ris_trends_data, surveys_in)
 from ris_kpi.ris_trends.categories import build_categories
 from ris_kpi.ris_trends.db_ids import add_db_ids, drop_rows_without_ids, id_db_tables
 from ris_kpi.ris_trends.kpi_metrics import GRAIN, build_kpis, check_pci_sources
@@ -59,9 +60,13 @@ def run_ris_trends(run_time=None):
     tables = {name: load_parent(cfg.SILVER_INPUT_DIR, name, cfg.KEEP_UPCS, cfg.KEEP_PAVEMENT_TYPES)
               for name in dict.fromkeys([cfg.ROUGHNESS_TABLE, cfg.RUTTING_TABLE, cfg.PCI_TABLE])}
     existing = load_existing(cfg.OUTPUT_ROOT, cfg.RIS_TRENDS_OUTPUT_NAME)
-    tables, n_new = keep_new_surveys(tables, existing)
+    if cfg.REFRESH_SURVEYS:                    # every survey of the run: recalculated, replaces its saved rows
+        n_new = surveys_in(tables)
+        log.info("RIS_TRENDS_REFRESH_SURVEYS: %s survey(s) of this run recalculated", n_new)
+    else:                                      # only surveys not saved yet
+        tables, n_new = keep_new_surveys(tables, existing)
     if not n_new:
-        log.info("No new survey in the silver tables — nothing written (%s unchanged)", output_path)
+        log.info("No survey to calculate in the silver tables — nothing written (%s unchanged)", output_path)
         return output_path
 
     # --- 2. DB tables: UPC filter, DB ids ---
@@ -84,7 +89,8 @@ def run_ris_trends(run_time=None):
     if created.empty and existing is not None:
         log.info("No row left for the new surveys — nothing written (%s unchanged)", output_path)
         return output_path
-    ris_trends_data = append_ris_trends_data(existing, created, run_time)
+    ris_trends_data = (refresh_ris_trends_data(existing, created, run_time) if cfg.REFRESH_SURVEYS
+                       else append_ris_trends_data(existing, created, run_time))
     path = save_run(ris_trends_data, cfg.OUTPUT_ROOT, cfg.RIS_TRENDS_OUTPUT_NAME, run_time.date())
     log.info("RIS trends done in %.1fs — %s", time.time() - start, path)
     return path

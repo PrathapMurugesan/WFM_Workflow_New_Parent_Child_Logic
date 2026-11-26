@@ -205,6 +205,10 @@ class RisTrends:
     DROP_ROWS_WITHOUT_IDS = DROP_ROWS_WITHOUT_IDS
     # Several survey_schedule_ids for one upc + phase + cycle: True = pick by wfm_survey_schedule; from .env
     SURVEY_ID_FALLBACK = SURVEY_ID_FALLBACK
+    # True = every survey of the run's silver scope is calculated again and replaces its saved rows (id / created_at
+    # kept, updated_at = this run), so a re-run survey gets fresh values. False = only surveys not saved yet (append).
+    # From .env RIS_TRENDS_REFRESH_SURVEYS
+    REFRESH_SURVEYS = env_bool("RIS_TRENDS_REFRESH_SURVEYS", True)
 
     # --- Output ---
     # ris_trends_data, saved as OUTPUT_ROOT/year=YYYY/month=MM/day=DD/ris_trends_data.csv (run date) + latest/.

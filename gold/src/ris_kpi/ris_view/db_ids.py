@@ -8,8 +8,9 @@
                                             (common/db_ids.survey_id_lookup), else no survey_id
     defect_type_id    master_defect_type    source_system + asset_type + defect_name
                                             = survey_system + asset_type + defect_name                -> id
-                      asset_type / defect_name from defect_type + pavement_type (defect_type_keys); Rutting: PAVEMENT,
-                      else Flexible Pavement; Total -> no defect_type_id
+                      asset_type / defect_name from defect_type + pavement_type (defect_type_keys); a key the
+                      table does not have is tried again with its older name (DEFECT_TYPE_FALLBACK); Total -> none.
+                      refresh_defect_type_ids re-maps every saved row each run (master_defect_type ids can change)
     id                random uuid4 per row. Set when a survey's rows are inserted; an UPDATE run keeps the saved id
                       (incremental.update_rows)
 created_at / updated_at are set by ris_view/view.py (run time; UPDATE: updated_at only on rows whose values changed).
@@ -32,8 +33,10 @@ ID_DB_TABLES = ["master_upc_project", "master_survey_system", "survey_data_map",
 REQUIRED_IDS = ["upc_id", "survey_id", "survey_source_id"]
 SURVEY_COLS = ["upc", "phase", "cycle", "defect_detected_on"]
 DEFECT_TYPE_KEYS = ["survey_system", "asset_type", "defect_name"]
-# (asset_type, defect_name) -> key tried when the first one has no id for that survey system
-DEFECT_TYPE_FALLBACK = {("PAVEMENT", "Rutting"): ("Flexible Pavement", "Rutting")}
+# (asset_type, defect_name) -> key tried when the first one has no id for that survey system (older names)
+DEFECT_TYPE_FALLBACK = {("Flexible Pavement", "Roughness"): ("Pavement (NSV)", "Roughness"),
+                        ("Flexible Pavement", "Ravelling/ Stripping"): ("Pavement (NSV)", "Ravelling"),
+                        ("Flexible Pavement", "Rutting"): ("PAVEMENT", "Rutting")}
 
 FINAL_COLUMNS = [
     "id", "survey_source_id", "upc", "upc_id", "phase", "cycle", "defect_detected_on", "survey_id",
@@ -66,18 +69,19 @@ def defect_type_keys(defect_type, pavement_type):
     """defect_type + pavement_type -> (asset_type, defect_name) of master_defect_type (old rules):
     Pothole / Cracking: Cement Concrete -> 'Rigid Pavements', else 'Flexible Pavement';
                         Cracking on Cement Concrete -> 'Crack on Rigid Pavement', else 'Cracking'
-    Roughness / Ravelling -> 'Pavement (NSV)'; Rutting -> 'PAVEMENT'; Total -> none."""
+    Roughness / Rutting / Ravelling -> 'Flexible Pavement' + 'Roughness' / 'Rutting' / 'Ravelling/ Stripping'
+    (master_defect_type has them only there); Total -> none."""
     pavement = pavement_type.astype("string").replace("", pd.NA).fillna("Asphalt")
     is_point = defect_type.isin(["Pothole", "Cracking"])
     is_concrete = pavement.str.strip().str.lower().isin(["cement concrete", "cememt concrete"]).fillna(False)
     asset_type = np.select(
-        [is_point & is_concrete, is_point & ~is_concrete, defect_type.isin(["Roughness", "Ravelling"]),
-         defect_type == "Rutting"],
-        ["Rigid Pavements", "Flexible Pavement", "Pavement (NSV)", "PAVEMENT"], default=None)
+        [is_point & is_concrete, is_point & ~is_concrete, defect_type.isin(["Roughness", "Ravelling", "Rutting"])],
+        ["Rigid Pavements", "Flexible Pavement", "Flexible Pavement"], default=None)
     defect_name = np.select(
         [(defect_type == "Cracking") & is_concrete, (defect_type == "Cracking") & ~is_concrete,
          defect_type == "Pothole", defect_type == "Roughness", defect_type == "Ravelling", defect_type == "Rutting"],
-        ["Crack on Rigid Pavement", "Cracking", "Pothole", "Roughness", "Ravelling", "Rutting"], default=None)
+        ["Crack on Rigid Pavement", "Cracking", "Pothole", "Roughness", "Ravelling/ Stripping", "Rutting"],
+        default=None)
     return (pd.Series(asset_type, index=defect_type.index, dtype="string"),
             pd.Series(defect_name, index=defect_type.index, dtype="string"))
 
@@ -107,6 +111,36 @@ def _add_defect_type_id(df, master_defect_type):
         log.warning("defect_type_id not found for:\n%s", df.loc[missing, ["source_system", "defect_type",
                     "pavement_type", "_asset_type", "_defect_name"]].drop_duplicates().to_string(index=False))
     return df.drop(columns=["_asset_type", "_defect_name"])
+
+
+def refresh_defect_type_ids(df, db_tables, touch=None):
+    """defect_type_id of EVERY row (saved rows of other surveys too) looked up again in master_defect_type, so an id
+    the table no longer has never stays in ris_view_data. Survey system from survey_source_id (master_survey_system);
+    rows whose survey system is unknown keep their saved id. touch = (column, value): set on the rows whose id
+    changed (e.g. updated_at)."""
+    if df is None or df.empty or db_tables.get("master_defect_type") is None:
+        return df
+    sys_tab = db_tables["master_survey_system"]
+    code = dict(zip(text_id(sys_tab["id"]), sys_tab["system_code"].astype("string").str.strip()))
+    work = df.copy()
+    work["_src"] = text_id(work["survey_source_id"]).map(code)
+    work["source_system"] = work["_src"]
+    work = _add_defect_type_id(work, db_tables["master_defect_type"])
+    old = df["defect_type_id"].astype("string")
+    new = work["defect_type_id"].astype("string")
+    unknown = work["_src"].isna().to_numpy()
+    merged = new.where(~unknown, old)
+    out = df.copy()
+    out["defect_type_id"] = [None if pd.isna(v) else str(v) for v in merged]
+    changed = (old.fillna("") != merged.fillna("")).to_numpy()
+    log.info("defect_type_id refreshed on all %s saved rows: %s changed", len(out), int(changed.sum()))
+    if changed.any():
+        log.info("defect_type_id changes (defect_type, old -> new):\n%s", pd.DataFrame(
+            {"defect_type": out.loc[changed, "defect_type"].to_numpy(), "old": old[changed].fillna("").to_numpy(),
+             "new": merged[changed].fillna("").to_numpy()}).value_counts().to_string())
+        if touch is not None:
+            out.loc[changed, touch[0]] = touch[1]
+    return out
 
 
 def id_db_tables(survey_id_fallback):

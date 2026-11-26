@@ -25,7 +25,7 @@ DB = {
 def test_defect_type_keys():
     asset, name = view_ids.defect_type_keys(pd.Series(["Cracking", "Cracking", "Pothole", "Rutting", "Total"]),
                                             pd.Series(["Cement Concrete", "", None, "", ""]))
-    assert asset.tolist()[:4] == ["Rigid Pavements", "Flexible Pavement", "Flexible Pavement", "PAVEMENT"]
+    assert asset.tolist()[:4] == ["Rigid Pavements", "Flexible Pavement", "Flexible Pavement", "Flexible Pavement"]
     assert name.tolist()[:4] == ["Crack on Rigid Pavement", "Cracking", "Pothole", "Rutting"]
     assert pd.isna(asset.iloc[4]) and pd.isna(name.iloc[4])
 
@@ -45,7 +45,7 @@ def test_view_ids_fallback_and_dropped_rows():
     assert out["upc"].tolist() == ["N/1"] * 4
     assert out["upc_id"].unique().tolist() == ["11"] and out["survey_source_id"].unique().tolist() == ["9"]
     assert out["survey_id"].unique().tolist() == ["s1"]                    # same id on two rows: one survey
-    assert out["defect_type_id"].tolist()[:3] == ["d-pot", "d-crack-rigid", "d-rut-flex"]  # Rutting via fallback
+    assert out["defect_type_id"].tolist()[:3] == ["d-pot", "d-crack-rigid", "d-rut-flex"]
     assert pd.isna(out["defect_type_id"].iloc[3])                          # Total: no defect type id
     assert out["id"].is_unique and str(uuid.UUID(out["id"].iloc[0])) == out["id"].iloc[0]
     final = view_ids.finalize(out.assign(created_at="t", updated_at="t"))
@@ -156,3 +156,27 @@ def test_survey_id_fallback_setting_from_env(monkeypatch):
                               "print(c.SURVEY_ID_FALLBACK, c.RisView.SURVEY_ID_FALLBACK, c.RisTrends.SURVEY_ID_FALLBACK)"],
                              env=env, capture_output=True, text=True, check=True).stdout.split()
         assert out == [expected] * 3
+
+
+def test_old_names_used_as_fallback():
+    db = dict(DB, master_defect_type=pd.DataFrame({
+        "id": ["old-rough", "old-rut"], "survey_system": ["NSV"] * 2,
+        "asset_type": ["Pavement (NSV)", "PAVEMENT"], "defect_name": ["Roughness", "Rutting"]}))
+    out = view_ids.add_db_ids(view_rows(("N/1", "Roughness", None), ("N/1", "Rutting", None)), db)
+    assert out["defect_type_id"].tolist() == ["old-rough", "old-rut"]
+
+
+def test_refresh_replaces_stale_ids_on_saved_rows():
+    db = dict(DB, master_defect_type=pd.DataFrame({
+        "id": ["new-rough", "new-rav", "d-pot"], "survey_system": ["NSV"] * 3,
+        "asset_type": ["Flexible Pavement"] * 3, "defect_name": ["Roughness", "Ravelling/ Stripping", "Pothole"]}))
+    saved = pd.DataFrame({"survey_source_id": ["9", "9", "9", "9", "unknown"],
+                          "defect_type": ["Roughness", "Ravelling", "Pothole", "Total", "Pothole"],
+                          "pavement_type": ["", "", "", "", ""],
+                          "defect_type_id": ["stale-1", "stale-2", "d-pot", None, "keep-me"],
+                          "updated_at": ["t0"] * 5})
+    out = view_ids.refresh_defect_type_ids(saved, db, touch=("updated_at", "t1"))
+    assert out["defect_type_id"].tolist()[:3] == ["new-rough", "new-rav", "d-pot"]
+    assert out["defect_type_id"].iloc[3] is None                         # Total: none
+    assert out["defect_type_id"].iloc[4] == "keep-me"                    # unknown survey system: left as saved
+    assert out["updated_at"].tolist() == ["t1", "t1", "t0", "t0", "t0"]  # touched only where the id changed

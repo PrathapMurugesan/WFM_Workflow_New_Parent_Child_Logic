@@ -4,6 +4,7 @@
     python -m upc_flow --upc N/01002/01001/GJ --upc ...     # or on the command line
     python -m upc_flow --upcs upcs.csv --dry-run            # only show the surveys found in the downloads
     python -m upc_flow --upcs upcs.csv --skip images        # without the image upload
+    python -m upc_flow --upcs tracker.xlsx --zone A --limit 1   # the NSV tracker sheet; first survey only
 
 1. Surveys: every Zone / Phase / Cycle folder of the downloads (RAW_S3_ROOT of .env, or --raw-root) that holds the
    UPC, kept when the list gives phase / cycle / zone and they match.
@@ -42,29 +43,58 @@ def upc_key(text):
     return re.sub(r"[/_\-\s]+", "/", str(text or "").strip()).upper()
 
 
-def number(x):
-    return re.sub(r"\.0$", "", str(x or "").strip())
-
-
 # --- the list -------------------------------------------------------------------------------------------------
 
-def read_list(path=None, upcs=()):
-    """[{upc, phase, cycle, zone}] from a CSV / text file (column upc; phase, cycle, zone optional - empty = any)
-    and / or --upc values. A file without a header: one UPC per line."""
-    rows = []
-    if path:
-        text = Path(path).read_text(encoding="utf-8-sig")
-        lines = [ln for ln in text.splitlines() if ln.strip()]
-        if lines and "upc" in lines[0].lower():
-            delim = "\t" if "\t" in lines[0] else ","
-            for r in csv.DictReader(lines, delimiter=delim):
-                r = {str(k).strip().lower(): (v or "").strip() for k, v in r.items() if k}
-                if r.get("upc"):
-                    rows.append({"upc": upc_key(r["upc"]), "phase": number(r.get("phase")),
-                                 "cycle": number(r.get("cycle")), "zone": (r.get("zone") or "").upper()})
-        else:
-            rows += [{"upc": upc_key(ln.split(",")[0]), "phase": "", "cycle": "", "zone": ""} for ln in lines]
-    rows += [{"upc": upc_key(u), "phase": "", "cycle": "", "zone": ""} for u in upcs or []]
+UPC_RE = re.compile(r"N[/_\-\s]*\d{5}[/_\-\s]*\d{5}[/_\-\s]*[A-Za-z]{2}", re.IGNORECASE)
+
+
+def clean_upc(value):
+    """A UPC found anywhere in a cell ('N/02001/\n04001/RJ', 'N_01002_01001_GJ') -> 'N/02001/04001/RJ'; '' if none."""
+    m = UPC_RE.search(re.sub(r"\s+", "", str(value or "")))
+    return upc_key(m.group(0)) if m else ""
+
+
+def digits(value):
+    """'Phase 2' / 'Cycle 1' / '2.0' / 2 -> '2'; '' when empty."""
+    m = re.search(r"\d+", str(value or "").replace(".0", ""))
+    return str(int(m.group(0))) if m else ""
+
+
+def _table(path, sheet=None):
+    """Rows of a CSV / TSV / Excel file as dicts with lower-case headers ('UPC code' -> 'upc code')."""
+    import pandas as pd
+    path = Path(path)
+    if path.suffix.lower() in (".xlsx", ".xlsm", ".xls"):
+        df = pd.read_excel(path, sheet_name=sheet or 0, dtype=str)
+    else:
+        text = path.read_text(encoding="utf-8-sig")
+        first = next((ln for ln in text.splitlines() if ln.strip()), "")
+        if "upc" not in first.lower():                       # no header: one UPC per line
+            return [{"upc": ln.split(",")[0]} for ln in text.splitlines() if ln.strip()]
+        df = pd.read_csv(path, dtype=str, sep="\t" if "\t" in first else ",", encoding="utf-8-sig")
+    df.columns = [str(c).strip().lower() for c in df.columns]
+    return df.fillna("").to_dict("records")
+
+
+def read_list(path=None, upcs=(), sheet=None):
+    """[{upc, phase, cycle, zone}] from
+       - a simple list: CSV with column upc (+ phase, cycle, zone optional - empty = any), or one UPC per line;
+       - the NSV tracker (xlsx / csv): columns Zone, Phase ('Phase 2'), Cycle ('Cycle 1') and the UPC in the first
+         column whose name has 'upc' and holds a UPC in that row ('UPC code', 'UPC as ...');
+       and / or --upc values. Rows without a valid UPC are skipped (logged)."""
+    rows, skipped = [], 0
+    for r in (_table(path, sheet) if path else []):
+        upc_cols = [k for k in r if "upc" in k]
+        upc = next((u for u in (clean_upc(r[k]) for k in upc_cols) if u), "")
+        if not upc:
+            skipped += 1
+            continue
+        zone = str(r.get("zone", "")).strip().upper()
+        rows.append({"upc": upc, "phase": digits(r.get("phase")), "cycle": digits(r.get("cycle")),
+                     "zone": zone if re.fullmatch(r"[A-Z]", zone) else ""})
+    if skipped:
+        log(f"  {skipped} list row(s) without a valid UPC skipped")
+    rows += [{"upc": clean_upc(u) or upc_key(u), "phase": "", "cycle": "", "zone": ""} for u in upcs or []]
     out = []
     for r in rows:
         if r not in out:
@@ -154,6 +184,9 @@ def main(argv=None):
     p = argparse.ArgumentParser(prog="python -m upc_flow", description=__doc__.split("\n\n")[0])
     p.add_argument("--upcs", help="CSV / text file: column upc (+ phase, cycle, zone optional), or one UPC per line")
     p.add_argument("--upc", action="append", default=[], help="one UPC (repeatable)")
+    p.add_argument("--sheet", help="Excel list: sheet name (default the first sheet)")
+    p.add_argument("--zone", help="only list rows of this zone (e.g. A)")
+    p.add_argument("--limit", type=int, help="only the first N surveys found (e.g. 1 for a test)")
     p.add_argument("--raw-root", help="NSV downloads root (default RAW_S3_ROOT of .env)")
     p.add_argument("--gold-dir", help="gold output folder (default UPC_FLOW_GOLD_DIR, else <S3_GOLD_OUTPUT_DIR>/Latest_v2)")
     p.add_argument("--skip", action="append", default=[], choices=SURVEY_STAGES + ["gold"], help="leave out a stage")
@@ -169,7 +202,9 @@ def main(argv=None):
     gold_dir = (o.gold_dir or s.get("UPC_FLOW_GOLD_DIR") or
                 f"{(s.get('S3_GOLD_OUTPUT_DIR') or 's3://dhms-new-stgae/DHMS/NSV/Gold').rstrip('/')}/Latest_v2")
     log_dir = s.path("LOG_DIR", "logs")
-    wanted = read_list(o.upcs, o.upc)
+    wanted = read_list(o.upcs, o.upc, o.sheet)
+    if o.zone:
+        wanted = [r for r in wanted if r["zone"] in ("", o.zone.strip().upper())]
     if not wanted:
         p.error("no UPC given (--upcs FILE or --upc)")
     if not raw_root:
@@ -177,6 +212,8 @@ def main(argv=None):
 
     log(f"UPC flow | {len(wanted)} list row(s) | downloads {raw_root} | gold -> {gold_dir} | no database writes")
     surveys, missing = find_surveys(raw_root, wanted)
+    if o.limit:
+        surveys = surveys[:o.limit]
     for sv in surveys:
         log(f"  found  {sv['upc']}  zone {sv['zone']}  phase {sv['phase']}  cycle {sv['cycle']}   {sv['upc_folder']}")
     for r in missing:

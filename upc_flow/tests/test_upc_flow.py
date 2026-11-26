@@ -133,3 +133,27 @@ def test_stage_env_lets_the_environment_override_env_file(monkeypatch):
     monkeypatch.setenv("S3_GOLD_OUTPUT_DIR", "s3://b/Gold/Latest_v2")
     env = s.stage_env()
     assert env["S3_GOLD_OUTPUT_DIR"] == "s3://b/Gold/Latest_v2" and env["OTHER"] == "x"
+
+
+def test_read_nsv_tracker_columns(tmp_path):
+    import pandas as pd
+    df = pd.DataFrame({"S. No.": [201, 228, 367, 999], "Zone": ["A", "B", "C", "A"],
+                       "Phase": ["Phase 2", "Phase 2", "Phase 3", "Phase 3"],
+                       "Cycle": ["Cycle 1", "Cycle 1", "Cycle 1", "Cycle 1"],
+                       "UPC code": ["N/02007/11001/HR", "N/02001/\n04001/RJ", "", "not a upc"],
+                       "UPC as per contract": ["", "", "N/02008/01001/MP", ""]})
+    x = tmp_path / "tracker.xlsx"
+    df.to_excel(x, index=False)
+    rows = flow.read_list(x)
+    assert rows == [{"upc": "N/02007/11001/HR", "phase": "2", "cycle": "1", "zone": "A"},
+                    {"upc": "N/02001/04001/RJ", "phase": "2", "cycle": "1", "zone": "B"},
+                    {"upc": "N/02008/01001/MP", "phase": "3", "cycle": "1", "zone": "C"}]
+    c = tmp_path / "tracker.csv"
+    df.to_csv(c, index=False)
+    assert flow.read_list(c) == rows
+
+
+def test_limit_and_zone(fake):
+    assert flow.main(["--upc", "N/01002/01001/GJ", "--limit", "1"]) == 0
+    c = calls(fake)
+    assert len([x for x in c if x["args"][x["args"].index("--only") + 1] == "bronze"]) == 1

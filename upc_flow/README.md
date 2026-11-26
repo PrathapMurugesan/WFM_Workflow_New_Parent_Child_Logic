@@ -22,6 +22,11 @@ N/01002/01001/GJ,1,2,
 N/02001/12001/GJ,,,
 ```
 
+**The NSV tracker sheet works as it is** (`.xlsx` or `.csv`): columns `Zone`, `Phase` (`Phase 2`), `Cycle`
+(`Cycle 1`) and the UPC from the first column whose name has `upc` and holds a UPC in that row (`UPC code`, then
+`UPC as per contract`). Rows without a valid UPC are skipped. `--sheet` picks the Excel sheet, `--zone A` keeps one
+zone, `--limit 1` runs only the first survey found (a test).
+
 ## Commands (EC2, in tmux)
 
 ```bash
@@ -30,6 +35,7 @@ cd /root/dhms/dhms-nsv-pipeline
 .venv/bin/python -m upc_flow --upcs my_upcs.csv                # run them
 .venv/bin/python -m upc_flow --upc N/01002/01001/GJ             # one UPC, every phase / cycle found
 .venv/bin/python -m upc_flow --upcs my_upcs.csv --skip images   # without the image upload
+.venv/bin/python -m upc_flow --upcs tracker.xlsx --zone A --limit 1   # tracker sheet, first survey only
 .venv/bin/python -m upc_flow --upcs my_upcs.csv --gold-dir s3://dhms-new-stgae/DHMS/NSV/Gold/Latest_v3
 ```
 

@@ -166,6 +166,20 @@ def _run_log(log_dir, before):
     return folder, reason
 
 
+def silver_failures(folder):
+    """'silver: <n> table run(s) FAILED - <first error>' when the silver run log reports failed tables, else None
+    (silver exits 1 for a data-quality warning and for failed tables alike)."""
+    f = Path(folder) / "pipeline.log" if folder else None
+    if not f or not f.is_file():
+        return None
+    text = f.read_text(encoding="utf-8", errors="replace")
+    m = re.search(r"table runs FAILED:\s*(\d+)", text)
+    if not m or int(m.group(1)) == 0:
+        return None
+    err = re.findall(r"^\S+\s+\(?[\w ]+\)?\s+FAILED\s+.*$", text, re.M)
+    return f"silver: {m.group(1)} table run(s) FAILED" + (f" - {err[0].strip()[:200]}" if err else "")
+
+
 def run_py(args, env, log_dir):
     """(exit code, log folder, reason) of one run.py call (always --scheduled --no-write)."""
     cmd = [sys.executable, str(RUN_PY), "--scheduled", "--no-write"] + args
@@ -243,6 +257,11 @@ def main(argv=None):
             code, folder, why = run_py(["--only", stage, "--zone", sv["zone"], "--phase", sv["phase"],
                                         "--cycle", sv["cycle"], "--upc", sv["upc"]], env, log_dir)
             r["logs"] += [str(folder)] if folder else []
+            failed_tables = silver_failures(folder) if stage == "silver" else None
+            if failed_tables:                         # silver wrote no / not all tables: gold must not use it
+                r["status"], r["stopped_at"] = "failed", failed_tables
+                log(f"  FAILED at silver: {failed_tables} - next survey")
+                break
             if code == 0:
                 continue
             if code == 1 and why and "warning (exit" in why and stage in go_on:

@@ -197,16 +197,33 @@ def load_master_project(prj):
     return out
 
 
+DATE_YEARS = (1900, 2100)        # a date outside these years is a typo in the delivery (e.g. '202-07-14') -> NaT
+
+
+def _plausible(parsed):
+    """Parsed dates -> datetime64[ns]; NaT for years outside DATE_YEARS (also those pandas cannot hold in ns)."""
+    vals = [x if (x is not None and x is not pd.NaT and not pd.isna(x) and DATE_YEARS[0] <= x.year <= DATE_YEARS[1])
+            else pd.NaT for x in pd.Series(parsed, dtype=object)]
+    return pd.Series(pd.to_datetime(pd.Series(vals, dtype=object), errors="coerce"), dtype="datetime64[ns]")
+
+
 def read_dates(values):
     """Dates from text: ISO (2026-01-10, 2026-01-10 10:00:00) read as ISO, anything else day first
-       (08-01-2026, 08/01/2026 = 8 January). Unreadable → NaT."""
+       (08-01-2026, 08/01/2026 = 8 January). Unreadable or impossible (year outside DATE_YEARS, e.g. '202-07-14')
+       → NaT, logged once per call."""
     s = pd.Series(values).astype("string").str.strip()
     iso = s.str.match(r"^\d{4}-\d{1,2}-\d{1,2}").fillna(False).astype(bool)
     out = pd.Series(pd.NaT, index=s.index, dtype="datetime64[ns]")
-    if iso.any():
-        out[iso] = pd.to_datetime(s[iso], errors="coerce", format="ISO8601")
-    if (~iso).any():
-        out[~iso] = pd.to_datetime(s[~iso], errors="coerce", dayfirst=True, format="mixed")
+    for part, kw in ((iso, {"format": "ISO8601"}), (~iso, {"dayfirst": True, "format": "mixed"})):
+        if part.any():
+            parsed = pd.to_datetime(s[part], errors="coerce", **kw)
+            good = _plausible(parsed)
+            good.index = s[part].index
+            out[part] = good
+    bad = s.notna() & (s != "") & out.isna()
+    if bad.any():
+        print(f"  WARNING: {int(bad.sum())} date value(s) unreadable or out of {DATE_YEARS[0]}-{DATE_YEARS[1]} "
+              f"→ empty, e.g. {sorted(set(s[bad].astype(str)))[:3]}")
     return out
 
 

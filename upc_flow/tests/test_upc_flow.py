@@ -68,7 +68,8 @@ FAKE = textwrap.dedent("""
     d = Path(os.environ["LOG_DIR"]) / f"run_{time.time_ns()}"
     d.mkdir(parents=True)
     why = "warning (exit 1) - scheduled runs stop on warnings" if code == 1 else f"exit code {code}"
-    (d / "pipeline.log").write_text(f"!! STOPPED: {stage} {upc}: {why}\\n" if code else "Every step OK\\n")
+    extra = os.environ.get("FAKE_LOG_" + stage.upper(), "")
+    (d / "pipeline.log").write_text(extra + (f"!! STOPPED: {stage} {upc}: {why}\\n" if code else "Every step OK\\n"))
     sys.exit(code)
 """)
 
@@ -157,3 +158,14 @@ def test_limit_and_zone(fake):
     assert flow.main(["--upc", "N/01002/01001/GJ", "--limit", "1"]) == 0
     c = calls(fake)
     assert len([x for x in c if x["args"][x["args"].index("--only") + 1] == "bronze"]) == 1
+
+
+def test_silver_with_failed_tables_stops_the_survey(fake, monkeypatch):
+    monkeypatch.setenv("FAKE_CODES", json.dumps({"silver:N/08009/04001/GJ": 1}))
+    monkeypatch.setenv("FAKE_LOG_SILVER", "UPCs: 1 | table runs FAILED: 1 | DQ FAIL: 0\n"
+                                          "N_08009_04001_GJ (load) FAILED 0 0 OutOfBoundsDatetime: 202-07-14\n")
+    assert flow.main(["--upc", "N/08009/04001/GJ"]) == 1
+    stages = [x["args"][x["args"].index("--only") + 1] for x in calls(fake)]
+    assert stages == ["bronze", "silver"]                     # no images, no gold
+    res = (sorted((fake / "logs" / "upc_flow").iterdir())[-1] / "results.csv").read_text()
+    assert "table run(s) FAILED" in res and "OutOfBoundsDatetime" in res

@@ -19,6 +19,9 @@ Every S3 layer is built first; the database is written only after gold (push_sil
 | `gold/` | `gold` | run | case statuses + RIS KPIs → `ris_view_data`, `ris_trends_data` in S3; then the DB ids of rows already in the DB (`sync-db-ids`) |
 | `push_gold/` | `push_gold` | run | KPIs → `ris_view_kpi`, `ris_trends_kpi` |
 | `pipeline/`, `run.py` | — | — | order, controls, logs |
+| `wfm_flow/` | cron | survey | WFM surveys that are final approved → the stages above (`Gold/Latest`, pushed) |
+| `upc_flow/` | by hand | survey | a list of UPCs from the NSV downloads → bronze … gold (`Gold/Latest_v2`, never pushed) |
+| `status_update/` | cron | day | surveys whose defect cases changed in the DB since the previous DB pull → gold rebuilt; WFM surveys pushed to the DB (`status_update/README.md`) |
 
 Each folder keeps its own README with the details of its logic. Gold reads the DB tables (statuses, `master_upc_project`,
 survey ids) from the copy the existing DB export job writes to S3 (`S3_DB_TABLES_DIR`).
@@ -109,5 +112,6 @@ it to both pushes.
 ```bash
 python -m pytest -q tests                         # run rules (fake stages: no AWS, no DB)
 cd gold && python -m pytest -q                    # gold logic
+python -m pytest -q wfm_flow/tests upc_flow/tests status_update/tests
 python tools/make_test_upc.py                     # a fake survey in the bronze format, to test silver without real data
 ```

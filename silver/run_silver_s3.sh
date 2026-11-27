@@ -186,6 +186,10 @@ echo "  formats: parquet$([[ $EXCEL == 1 ]] && echo ' + excel')$([[ $CSV == 1 ]]
 
 cd "$CODE_DIR"
 
+# display_defect_id: the counter of a date continues after the ids the OTHER surveys already have in S3 silver
+# (silver/common/display_ids.py), so two surveys of the same date never get the same numbers
+export SILVER_S3_ROOT="${S3_OUT_ROOT}"
+
 "$PYTHON" main.py \
     --project "${LOCAL_IN}" \
     --out "${LOCAL_OUT_ROOT}" \

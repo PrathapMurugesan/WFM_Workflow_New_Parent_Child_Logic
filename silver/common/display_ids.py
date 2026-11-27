@@ -10,14 +10,20 @@ Runs once per UPC AFTER all tables are built; only display_defect_id changes (de
       breach rows whose parent has none (orphans) → their own D/{ddmmyy}/N/{counter:05d}
   Non-breach rows → NULL.
   ddmmyy  = tracker survey end date, else the defect_id date (prj.display_id_date_str).
-  counter = one running number per date: it continues after the highest top-level counter of OTHER UPCs with
-            the same date already in the output folder (<output root>/**/dlm_kpi/<table>.parquet).
+  counter = one running number per date: it continues after the highest top-level counter of OTHER surveys with
+            the same date - in the local output folder (<output root>/**/dlm_kpi/<table>.parquet) AND in S3 silver
+            (SILVER_S3_ROOT/**/<folder>/<table>.parquet, exported by run_silver_s3.sh). Each EC2 run has only its own
+            survey in the local folder, so without the S3 look two surveys of the same date got the same numbers
+            (e.g. D/060426/N/00001 in N/08009/04002/GJ and N/08009/05001/GJ). Ids already written are not changed.
+            S3 not readable -> the run stops (DISPLAY_ID_S3_CHECK=0 switches the S3 look off).
   Order   = top-level: threshold_name, lane, start_chainage, end_chainage, record_id, id (blanks last);
             children: numbered inside (parent_id, threshold_name) by start_chainage, end_chainage, record_id, id.
 """
 import glob
+import io
 import os
 import re
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 import pandas as pd
@@ -29,13 +35,69 @@ _ORDER = ['threshold_name', 'lane', 'start_chainage', 'end_chainage', 'record_id
 _CHILD_ORDER = ['start_chainage', 'end_chainage', 'record_id', 'id']
 
 
+_S3_IDS = {}          # (root, folder, table set) -> {key: [display_defect_id, ...]}  (read once per process)
+
+
+def _s3_display_ids(root, folder, tables):
+    """{S3 key: display_defect_id values} of every <root>/**/<folder>/<table>.parquet (only that column is read)."""
+    cache = (root, folder, tuple(sorted(tables)))
+    if cache in _S3_IDS:
+        return _S3_IDS[cache]
+    import boto3
+    import pyarrow.parquet as pq
+    s3 = boto3.client('s3')
+    bucket, _, prefix = root[len('s3://'):].partition('/')
+    prefix = prefix.strip('/') + '/' if prefix.strip('/') else ''
+    names = {f'{t}.parquet' for t in tables}
+    keys = [o['Key'] for page in s3.get_paginator('list_objects_v2').paginate(Bucket=bucket, Prefix=prefix)
+            for o in page.get('Contents', [])
+            if o['Key'].rsplit('/', 1)[-1] in names and f'/{folder}/' in '/' + o['Key']]
+
+    def read(key):
+        body = s3.get_object(Bucket=bucket, Key=key)['Body'].read()
+        try:
+            col = pq.read_table(io.BytesIO(body), columns=['display_defect_id']).column(0).to_pylist()
+        except (KeyError, ValueError):            # a file without display_defect_id
+            col = []
+        return key, [str(v) for v in col if v is not None]
+
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        out = dict(pool.map(read, keys))
+    print(f"  display ids in S3 silver: {len(out)} {folder} file(s) under {root}")
+    _S3_IDS[cache] = out
+    return out
+
+
+def _max_counter_s3(prj, top, tables, folder):
+    """Highest counter of top in S3 silver, the files of this survey's own folder left out (0 if none / switched
+    off). Raises when S3 cannot be read, so no survey gets numbers another survey already has."""
+    root = os.environ.get('SILVER_S3_ROOT', '').strip().rstrip('/')
+    if not root.startswith('s3://') or os.environ.get('DISPLAY_ID_S3_CHECK', '1').strip() in ('0', 'false', 'False'):
+        return 0
+    own = os.path.relpath(prj.out_dir, prj.output_root).replace(os.sep, '/').strip('/') + '/'
+    try:
+        found = _s3_display_ids(root, folder, tables)
+    except Exception as e:
+        raise RuntimeError(f"display_defect_id: cannot read the ids of the other surveys in {root} ({e}) - "
+                           f"stopped so no number is used twice (DISPLAY_ID_S3_CHECK=0 skips this check)") from e
+    best = 0
+    for key, ids in found.items():
+        if f'/{own}' in '/' + key:
+            continue
+        nums = [int(m.group(1)) for v in ids if (m := top.match(v))]
+        if nums:
+            best = max(best, max(nums))
+    return best
+
+
 def _max_counter_other_upcs(prj, date_str, tables=None, folder='dlm_kpi'):
-    """Highest top-level counter D/{date}/[NDRO]/<n> used by other UPCs in the output folder (0 if none)."""
+    """Highest top-level counter D/{date}/[NDRO]/<n> used by other surveys: local output folder and S3 silver
+    (0 if none)."""
     top = re.compile(rf'^D/{re.escape(date_str)}/[NDRO]/(\d+)$')
     if tables is None:
         tables = list(config.DISPLAY_ID_BASE_TABLES) + list(config.DISPLAY_ID_CHILD_PARENT)
     own = os.path.normpath(prj.out_dir)
-    best = 0
+    best = _max_counter_s3(prj, top, tables, folder)
     for t in tables:
         for f in glob.glob(os.path.join(prj.output_root, '**', folder, f'{t}.parquet'), recursive=True):
             if os.path.normpath(f).startswith(own + os.sep):

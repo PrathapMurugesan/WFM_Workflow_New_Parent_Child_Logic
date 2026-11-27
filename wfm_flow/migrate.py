@@ -148,7 +148,13 @@ def main(args):
     ap.add_argument("--dest", default=cfg.stage_root(), help="stage root (default WFM_STAGE_S3)")
     o = ap.parse_args(args)
     sid = o.survey_id or o.source.rstrip("/\\").replace("\\", "/").split("/")[-1]
-    source = o.source if ("/" in o.source or "\\" in o.source) else f"{cfg.get('WFM_REPORTS_S3_ROOT').rstrip('/')}/{sid}/"
+    if "/" in o.source or "\\" in o.source:
+        source = o.source
+    else:                                         # a survey id: the root, else its year folders (trigger.upload_roots)
+        from .trigger import s3_upload
+        found = s3_upload(cfg, sid)
+        source = found["location"] if found else f"{cfg.get('WFM_REPORTS_S3_ROOT').rstrip('/')}/{sid}/"
+        print(f"upload: {source}")
     m = migrate(source, sid, o.zone.upper(), o.phase, o.cycle, o.upc, o.dest)
     return 1 if m["unreadable_count"] else 0
 

@@ -13,7 +13,8 @@ For each survey:
      (metadata.py); zone (master_zone.zone_code), phase, cycle, UPC from the schedule row
   2. processed log (state.py): 'ok' is never processed again; 'stopped' only when the upload changed;
      'failed' is retried up to WFM_MAX_ATTEMPTS times
-  3. S3: the upload must be there - <WFM_REPORTS_S3_ROOT>/<survey id>/ with D1..D4
+  3. S3: the upload must be there - <WFM_REPORTS_S3_ROOT>/<survey id>/ with D1..D4, else in a year folder next
+     to it: .../wfm/reports/ -> .../wfm/2027/reports/<id>/, .../wfm/2026/reports/<id>/ (WFM_REPORTS_YEARS)
   4. MIGRATE (migrate.py): unzipped, no videos -> <WFM_STAGE_S3>/Zone D/Phase 1/Cycle 2/<UPC>/Deliverable 1..4/
   5. run.py --scheduled --only <stage> --zone --phase --cycle --upc, one stage after another, RAW_S3_ROOT =
      <WFM_STAGE_S3>:  bronze -> silver -> images -> gold -> push_silver -> push_gold  (the database last)
@@ -30,6 +31,7 @@ import argparse
 import csv
 import json
 import os
+import re
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -59,9 +61,64 @@ def _s3():
     return boto3.client("s3")
 
 
-def s3_upload(cfg, survey_id):
-    """{'location', 'deliverables', 'files', 'newest'} of the upload (None when nothing is there)."""
-    location = f"{cfg.get('WFM_REPORTS_S3_ROOT').rstrip('/')}/{survey_id}/"
+YEAR_FOLDER = re.compile(r"^(19|20)\d\d$")
+
+
+def _year_folders(parent):
+    """Names of the 4-digit (year) folders directly in parent (s3:// or local)."""
+    if not parent.startswith("s3://"):
+        p = Path(parent)
+        return [x.name for x in p.iterdir() if x.is_dir() and YEAR_FOLDER.match(x.name)] if p.is_dir() else []
+    bucket, _, prefix = parent[5:].partition("/")
+    prefix = prefix.rstrip("/") + "/" if prefix.strip("/") else ""
+    out = []
+    for page in _s3().get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=prefix, Delimiter="/"):
+        for cp in page.get("CommonPrefixes", []):
+            name = cp["Prefix"][len(prefix):].strip("/")
+            if YEAR_FOLDER.match(name):
+                out.append(name)
+    return out
+
+
+def upload_roots(cfg):
+    """Where the uploads are looked for, in this order:
+       1. WFM_REPORTS_S3_ROOT                                       (.../wfm/reports/)
+       2. the same folder inside each year folder next to it, newest year first (.../wfm/2027/reports/,
+          .../wfm/2026/reports/). WFM_REPORTS_YEARS: 'auto' (default) = every year folder found, or a list
+          '2026,2027', or empty = only WFM_REPORTS_S3_ROOT."""
+    root = cfg.get("WFM_REPORTS_S3_ROOT").rstrip("/\\")
+    years_cfg = cfg.get("WFM_REPORTS_YEARS")
+    if not years_cfg:
+        return [root]
+    if root.startswith("s3://"):
+        parent, _, leaf = root.rpartition("/")
+        join = lambda y: f"{parent}/{y}/{leaf}"                  # noqa: E731
+    else:
+        parent, leaf = str(Path(root).parent), Path(root).name
+        join = lambda y: str(Path(parent) / y / leaf)            # noqa: E731
+    if years_cfg.strip().lower() == "auto":
+        try:
+            years = _year_folders(parent if not root.startswith("s3://") else parent + "/")
+        except Exception as e:                                   # noqa: BLE001
+            log(f"cannot list the year folders of {parent}/ ({type(e).__name__}: {e}) - only {root}/ is used")
+            years = []
+    else:
+        years = [y.strip() for y in years_cfg.split(",") if y.strip()]
+    return [root] + [join(y) for y in sorted(set(years), reverse=True)]
+
+
+def s3_upload(cfg, survey_id, roots=None):
+    """{'location', 'deliverables', 'files', 'newest'} of the upload: the first of upload_roots() that has files for
+    the survey (None when nothing is anywhere)."""
+    for root in roots or upload_roots(cfg):
+        found = _upload_at(f"{root.rstrip('/')}/{survey_id}/")
+        if found:
+            return found
+    return None
+
+
+def _upload_at(location):
+    """The upload in one folder (None when it has no files)."""
     if not location.startswith("s3://"):                         # a local folder of uploads (tests)
         base = Path(location)
         files = [p for p in base.rglob("*") if p.is_file()] if base.is_dir() else []
@@ -199,6 +256,8 @@ def main(args=None):
         return 1
     state = State(work / "state", cfg.get("WFM_STATE_S3"))
     log(f"{len(surveys)} survey(s) in Postgres")
+    roots = upload_roots(cfg)
+    log("uploads looked for in: " + " | ".join(f"{r}/" for r in roots))
 
     counts, bad = {}, 0
     for item in surveys:
@@ -211,21 +270,23 @@ def main(args=None):
             continue
         d = info
         try:
-            upload = s3_upload(cfg, sid)
+            upload = s3_upload(cfg, sid, roots)
         except Exception as e:                                   # noqa: BLE001
             counts["s3_error"] = counts.get("s3_error", 0) + 1
             log(f"  skip {sid}: cannot list the upload ({type(e).__name__}: {e})")
             continue
         if not upload:
             counts["not_in_s3"] = counts.get("not_in_s3", 0) + 1
-            log(f"  skip {sid}: final approved, but nothing in {cfg.get('WFM_REPORTS_S3_ROOT')}{sid}/ yet")
+            log(f"  skip {sid}: final approved, but nothing in {roots[0]}/{sid}/"
+                + (f" or the year folders ({len(roots) - 1})" if len(roots) > 1 else "") + " yet")
             continue
         last = state.get(sid)
         fp = metadata.fingerprint(item["schedule"], item["reports"])
         reason = "forced" if o.force else "again" if last.get("status") in DONE else \
             "retry" if last.get("status") in ("failed", "stopped", "running") else "new"
         log(f"  {reason.upper():7} {sid}  UPC {d['upc']}  zone {d['zone']}  phase {d['phase']}  cycle {d['cycle']}  "
-            f"upload {upload['files']} file(s) {upload['deliverables']}")
+            f"upload {upload['files']} file(s) {upload['deliverables']}"
+            + ("" if upload["location"].startswith(roots[0].rstrip("/") + "/") else f" from {upload['location']}"))
         if o.dry_run:
             counts["would_run"] = counts.get("would_run", 0) + 1
             continue

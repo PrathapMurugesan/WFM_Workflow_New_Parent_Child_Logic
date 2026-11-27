@@ -37,7 +37,9 @@ zone / phase / cycle / UPC                                             (unzipped
    | `stopped` | stopped at a step: a warning outside `WFM_CONTINUE_ON_WARNING`, or a DB check with blockers (`stopped_at` names it) | again only when the survey changes in WFM (new upload / version); else `--survey <id> --force` |
    | `failed` | the copy failed, or a step failed / crashed | retried, up to `WFM_MAX_ATTEMPTS` (3) |
    | `running` | being processed (left behind only if the machine stopped) | processed again |
-3. **Upload there?** `<WFM_REPORTS_S3_ROOT>/<survey id>/` must have files.
+3. **Upload there?** `<WFM_REPORTS_S3_ROOT>/<survey id>/` must have files - else the same folder in a year folder
+   next to it, newest year first: `.../wfm/2027/reports/<survey id>/`, `.../wfm/2026/reports/<survey id>/`
+   (`WFM_REPORTS_YEARS`). The trigger log names the folder when the upload came from a year folder.
 4. **MIGRATE** to `<WFM_STAGE_S3>/Zone D/Phase 1/Cycle 2/N_04018_05002_AP/Deliverable 1 - RAMS Data/...`
    (d2, d3, d4 alike). The UPC folder is emptied first. Zips are opened into the folder of their name, upload
    timestamps are removed (a file uploaded twice: the newest), videos are left out, damaged zip entries are recovered
@@ -114,6 +116,7 @@ anywhere takes the default. A key set but empty stays empty (`WFM_STATE_S3=` →
 | Key | Default | |
 |---|---|---|
 | `WFM_REPORTS_S3_ROOT` | `s3://nhai-dhms-uat/wfm_reports/staging/wfm/reports/` | the WFM uploads |
+| `WFM_REPORTS_YEARS` | `auto` | upload not in the root: look in `<parent>/<year>/reports/` (`auto` = every year folder, or `2026,2027`, empty = root only) |
 | `WFM_STAGE_S3` | `s3://dhms-new-stgae/DHMS/NSV/WFM_Raw/` | migrated copy = `RAW_S3_ROOT` of the runs |
 | `WFM_STATE_S3` | `s3://dhms-new-stgae/DHMS/NSV/Pipeline/wfm_state` | processed log mirror |
 | `WFM_DB_NAME`, `WFM_DB_SCHEMA` | `DB_NAME`, `DB_SCHEMA` | where `wfm_survey_schedule` / `wfm_report` are |

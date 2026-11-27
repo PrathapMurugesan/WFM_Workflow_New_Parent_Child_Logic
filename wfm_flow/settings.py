@@ -21,6 +21,9 @@ WFM_ENV = Path(os.getenv("WFM_ENV") or WFM_DIR / ".env")
 DEFAULTS = {
     # the WFM uploads: <root>/<survey id>/D1..D4/<upload timestamp>-<file name>
     "WFM_REPORTS_S3_ROOT": "s3://nhai-dhms-uat/wfm_reports/staging/wfm/reports/",
+    # an upload not in the root is looked for in the year folders next to it: .../wfm/<year>/reports/<survey id>/
+    # 'auto' = every year folder found (newest first), a list '2026,2027', or empty = the root only
+    "WFM_REPORTS_YEARS": "auto",
     # the migrated copy (unzipped, no videos) in the layout bronze reads (bronze/run_download.py):
     # <root>/Zone D/Phase 1/Cycle 1/N_04018_05002_AP/Deliverable 1 - RAMS Data/...   -> RAW_S3_ROOT of the run
     "WFM_STAGE_S3": "s3://dhms-new-stgae/DHMS/NSV/WFM_Raw/",

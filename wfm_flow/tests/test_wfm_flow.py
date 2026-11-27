@@ -199,3 +199,43 @@ def test_details_from_schedule():
     assert ok and not why
     ok, why = eligibility({"current_status": "Draft", "deleted_at": "x"}, [], ["Survey Final Approved"])
     assert not ok and len(why) == 2
+
+
+def test_upload_found_in_a_year_folder(env):
+    """Not in WFM_REPORTS_S3_ROOT (<tmp>/uploads) -> <tmp>/2026/uploads/<id>/ is used; newest year first."""
+    import shutil
+    from wfm_flow.settings import WfmSettings
+    trigger = env["trigger"]
+    shutil.rmtree(env["tmp"] / "uploads" / SID)
+    make_upload(env["tmp"] / "2026" / "uploads")
+    (env["tmp"] / "2027" / "uploads").mkdir(parents=True)
+    (env["tmp"] / "not_a_year").mkdir()
+    roots = trigger.upload_roots(WfmSettings())
+    assert [Path(r).relative_to(env["tmp"]).as_posix() for r in roots] == ["uploads", "2027/uploads", "2026/uploads"]
+    up = trigger.s3_upload(WfmSettings(), SID)
+    assert Path(up["location"]).parent == env["tmp"] / "2026" / "uploads" and up["deliverables"] == ["d1", "d2", "d3", "d4"]
+    assert trigger.main([]) == 0
+    assert [c["argv"][c["argv"].index("--only") + 1] for c in env["calls"]()] == STAGES
+    assert env["state"]()[SID]["status"] == "ok"
+
+
+def test_root_wins_and_years_can_be_switched_off(env, monkeypatch):
+    from wfm_flow.settings import WfmSettings
+    trigger = env["trigger"]
+    make_upload(env["tmp"] / "2026" / "uploads")
+    assert Path(trigger.s3_upload(WfmSettings(), SID)["location"]).parent == env["tmp"] / "uploads"
+    monkeypatch.setenv("WFM_REPORTS_YEARS", "")
+    assert len(trigger.upload_roots(WfmSettings())) == 1
+    monkeypatch.setenv("WFM_REPORTS_YEARS", "2026")
+    assert [Path(r).name for r in trigger.upload_roots(WfmSettings())] == ["uploads", "uploads"]
+
+
+def test_s3_year_folder_names():
+    from wfm_flow import trigger
+
+    class Cfg:
+        def get(self, k):
+            return {"WFM_REPORTS_S3_ROOT": "s3://b/wfm_reports/staging/wfm/reports/", "WFM_REPORTS_YEARS": "2026,2027"}[k]
+    assert trigger.upload_roots(Cfg()) == ["s3://b/wfm_reports/staging/wfm/reports",
+                                           "s3://b/wfm_reports/staging/wfm/2027/reports",
+                                           "s3://b/wfm_reports/staging/wfm/2026/reports"]
